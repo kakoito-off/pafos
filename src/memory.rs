@@ -1,8 +1,31 @@
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
 use x86_64::{
     PhysAddr, VirtAddr,
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
+    structures::paging::{
+        FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
+        Size4KiB, mapper::MapToError,
+    },
 };
+
+/// Backs the virtual range `start..start + size` with fresh physical frames.
+pub fn map_region(
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    start: VirtAddr,
+    size: u64,
+    flags: PageTableFlags,
+) -> Result<(), MapToError<Size4KiB>> {
+    let start_page = Page::containing_address(start);
+    let end_page = Page::containing_address(start + size - 1u64);
+
+    for page in Page::range_inclusive(start_page, end_page) {
+        let frame = frame_allocator
+            .allocate_frame()
+            .ok_or(MapToError::FrameAllocationFailed)?;
+        unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
+    }
+    Ok(())
+}
 
 /// Initialize a new OffsetPageTable.
 ///

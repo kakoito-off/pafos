@@ -5,10 +5,12 @@
 //! the same functions become system calls and program code stays unchanged.
 
 use crate::input;
+use crate::tmpfs;
 use crate::vga_buffer::WRITER;
 use x86_64::instructions::interrupts;
 
 pub use crate::input::{CTRL_C, CTRL_D};
+pub use crate::tmpfs::{FileInfo, FsError, FsStats, MAX_NAME_LEN, Mode};
 pub use crate::{print, println};
 
 pub const BACKSPACE: char = '\u{8}';
@@ -60,4 +62,45 @@ pub fn backspace() {
 
 pub fn clear_screen() {
     interrupts::without_interrupts(|| WRITER.lock().clear_screen());
+}
+
+/// An open file. Data is always copied between the kernel and the caller's
+/// buffers, never handed out by reference, so the same API works across a
+/// future ring 3 boundary. Closed automatically when dropped.
+pub struct File {
+    fd: usize,
+}
+
+impl File {
+    pub fn open(name: &str, mode: Mode) -> Result<File, FsError> {
+        tmpfs::open(name, mode).map(|fd| File { fd })
+    }
+
+    /// Reads up to `buf.len()` bytes; returns 0 at end of file.
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, FsError> {
+        tmpfs::read(self.fd, buf)
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> Result<usize, FsError> {
+        tmpfs::write(self.fd, data)
+    }
+}
+
+impl Drop for File {
+    fn drop(&mut self) {
+        let _ = tmpfs::close(self.fd);
+    }
+}
+
+pub fn remove_file(name: &str) -> Result<(), FsError> {
+    tmpfs::remove(name)
+}
+
+/// The `index`-th file in name order, or `None` past the last one.
+pub fn file_at(index: usize) -> Option<FileInfo> {
+    tmpfs::file_at(index)
+}
+
+pub fn fs_stats() -> Result<FsStats, FsError> {
+    tmpfs::stats()
 }

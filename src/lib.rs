@@ -17,6 +17,7 @@ pub mod memory;
 pub mod programs;
 pub mod serial;
 pub mod sys;
+mod tmpfs;
 pub mod vga_buffer;
 
 /// Sets up everything the CPU needs before it can safely run kernel code:
@@ -28,17 +29,29 @@ pub fn init_core() {
     x86_64::instructions::interrupts::enable();
 }
 
-/// Sets up paging and the heap, so that `alloc` types (`Box`, `Vec`, `String`, ...)
-/// become usable. Must run after `init_core()` (page faults need a working IDT)
-/// and needs the `BootInfo` passed in by the bootloader.
+/// Sets up paging, the heap (so `Box`, `Vec`, `String`, ... work) and the
+/// tmpfs data region. Must run after `init_core()` (page faults need a working
+/// IDT) and needs the `BootInfo` passed in by the bootloader.
 pub fn init_memory(boot_info: &'static BootInfo) {
     use x86_64::VirtAddr;
+    use x86_64::structures::paging::PageTableFlags;
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+
+    memory::map_region(
+        &mut mapper,
+        &mut frame_allocator,
+        VirtAddr::new(tmpfs::TMPFS_START as u64),
+        tmpfs::TMPFS_SIZE as u64,
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+    )
+    .expect("tmpfs region mapping failed");
+    // The region was just mapped and nothing else uses it; the heap is ready.
+    unsafe { tmpfs::init(tmpfs::TMPFS_START, tmpfs::TMPFS_SIZE) };
 }
 pub trait Testable {
     fn run(&self) -> ();
