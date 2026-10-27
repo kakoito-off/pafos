@@ -6,6 +6,7 @@
 #![reexport_test_harness_main = "test_main"]
 
 extern crate alloc;
+use bootloader::BootInfo;
 use core::panic::PanicInfo;
 
 pub mod allocator;
@@ -15,11 +16,26 @@ pub mod memory;
 pub mod serial;
 pub mod vga_buffer;
 
-pub fn init() {
+/// Sets up everything the CPU needs before it can safely run kernel code:
+/// GDT/TSS, IDT, the PIC chips, and finally enables interrupts.
+pub fn init_core() {
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };
     x86_64::instructions::interrupts::enable();
+}
+
+/// Sets up paging and the heap, so that `alloc` types (`Box`, `Vec`, `String`, ...)
+/// become usable. Must run after `init_core()` (page faults need a working IDT)
+/// and needs the `BootInfo` passed in by the bootloader.
+pub fn init_memory(boot_info: &'static BootInfo) {
+    use x86_64::VirtAddr;
+
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    let mut mapper = unsafe { memory::init(phys_mem_offset) };
+    let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
+
+    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
 }
 pub trait Testable {
     fn run(&self) -> ();
@@ -74,15 +90,16 @@ pub fn hlt_loop() -> ! {
 }
 
 #[cfg(test)]
-use bootloader::{BootInfo, entry_point};
+use bootloader::entry_point;
 
 #[cfg(test)]
 entry_point!(test_kernel_main);
 
 /// Entry point for `cargo xtest`
 #[cfg(test)]
-fn test_kernel_main(_boot_info: &'static BootInfo) -> ! {
-    init();
+fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
+    init_core();
+    init_memory(boot_info);
     test_main();
     hlt_loop();
 }
