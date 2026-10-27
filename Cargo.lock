@@ -77,6 +77,8 @@ dependencies = [
  "linked_list_allocator",
  "pafos-abi",
  "pafos-shell",
+ "pafos-time",
+ "pafos-timer",
  "pc-keyboard",
  "pic8259",
  "spin 0.5.2",
@@ -91,6 +93,20 @@ version = "0.1.0"
 
 [[package]]
 name = "pafos-shell"
+version = "0.1.0"
+dependencies = [
+ "libpafos",
+]
+
+[[package]]
+name = "pafos-time"
+version = "0.1.0"
+dependencies = [
+ "libpafos",
+]
+
+[[package]]
+name = "pafos-timer"
 version = "0.1.0"
 dependencies = [
  "libpafos",

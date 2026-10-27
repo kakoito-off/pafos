@@ -10,6 +10,7 @@ use bootloader::BootInfo;
 use core::panic::PanicInfo;
 
 pub mod allocator;
+pub mod clock;
 pub mod gdt;
 mod input;
 pub mod interrupts;
@@ -21,11 +22,12 @@ mod tmpfs;
 pub mod vga_buffer;
 
 /// Sets up everything the CPU needs before it can safely run kernel code:
-/// GDT/TSS, IDT, the PIC chips, and finally enables interrupts.
+/// GDT/TSS, IDT, the PIC chips, the timer, and finally enables interrupts.
 pub fn init_core() {
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };
+    clock::init();
     x86_64::instructions::interrupts::enable();
 }
 

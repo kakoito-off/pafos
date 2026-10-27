@@ -13,6 +13,10 @@ type Main = fn(args: &[&str]) -> Exit;
 
 static PROGRAMS: &[(&str, Main)] = &[
     ("shell", pafos_shell::main),
+    #[cfg(feature = "time")]
+    ("time", pafos_time::main),
+    #[cfg(feature = "timer")]
+    ("timer", pafos_timer::main),
 ];
 
 /// Starts a program and waits for it to finish.

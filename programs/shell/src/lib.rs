@@ -61,16 +61,17 @@ pub fn main(_args: &[&str]) -> Exit {
     }
 }
 
-/// Anything that is not a builtin is looked up as a program.
+/// Anything that is not a builtin is looked up as a program. Programs
+/// report their own errors, so the exit status is not printed.
 fn run_program(name: &str, args: &[&str]) -> Result<(), Error> {
     match process::exec(name, args) {
-        Ok(Exit::Success) => {}
-        Ok(Exit::Interrupted) => println!("^C"),
-        Ok(Exit::Error) => println!("{}: failed", name),
-        Err(Error::NotFound) => println!("unknown command: {}", name),
-        Err(err) => return Err(err),
+        Ok(_) => Ok(()),
+        Err(Error::NotFound) => {
+            println!("unknown command: {}", name);
+            Ok(())
+        }
+        Err(err) => Err(err),
     }
-    Ok(())
 }
 
 fn with_name(

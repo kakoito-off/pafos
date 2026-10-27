@@ -6,7 +6,7 @@
 //! and the `user_*` helpers will start checking that pointers lie in the
 //! program's memory. The calls themselves stay the same.
 
-use crate::{input, programs, tmpfs, vga_buffer};
+use crate::{clock, input, programs, tmpfs, vga_buffer};
 use alloc::vec::Vec;
 use pafos_abi::{
     Error, FIRST_FILE_FD, FsStats, Mode, READ_KEY_NONBLOCK, STDOUT, StrRef, console, encode, nr,
@@ -42,6 +42,8 @@ pub fn dispatch(nr: usize, a: [usize; 4]) -> Result<usize, Error> {
             *user_mut::<FsStats>(a[0])? = tmpfs::stats()?;
             Ok(0)
         }
+
+        nr::UPTIME_MS => Ok(clock::uptime_ms() as usize),
 
         nr::EXEC => exec(a),
         nr::PROGRAM_AT => fill(a[1], programs::name_at(a[0])),
