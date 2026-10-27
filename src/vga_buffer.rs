@@ -109,7 +109,13 @@ impl Writer {
     /// support strings with non-ASCII characters, since they can't be printed in the VGA text
     /// mode.
     fn write_string(&mut self, s: &str) {
-        for byte in s.bytes() {
+        self.write_bytes(s.as_bytes());
+    }
+
+    /// Like `write_string`, for raw bytes: anything but printable ASCII and
+    /// `\n` shows up as a placeholder glyph.
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
             match byte {
                 // printable ASCII byte or newline
                 0x20..=0x7e | b'\n' => self.write_byte(byte),
@@ -181,6 +187,10 @@ macro_rules! print {
 macro_rules! println {
     () => ($crate::print!("\n"));
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+pub fn clear_screen() {
+    x86_64::instructions::interrupts::without_interrupts(|| WRITER.lock().clear_screen());
 }
 
 /// Prints the given formatted string to the VGA text buffer

@@ -6,7 +6,7 @@
 
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
-use pafos::{println, programs, sys};
+use pafos::{println, programs, vga_buffer};
 
 entry_point!(kernel_main);
 
@@ -18,8 +18,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     test_main();
 
     loop {
-        let exit = sys::run(programs::shell::main, &[]);
-        sys::clear_screen();
+        let exit = programs::run("shell", &[]);
+        vga_buffer::clear_screen();
         println!("shell exited ({:?}), starting a new one", exit);
     }
 }

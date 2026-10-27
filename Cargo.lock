@@ -42,6 +42,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libpafos"
+version = "0.1.0"
+dependencies = [
+ "pafos-abi",
+]
+
+[[package]]
 name = "linked_list_allocator"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -66,13 +73,27 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "lazy_static",
+ "libpafos",
  "linked_list_allocator",
+ "pafos-abi",
+ "pafos-shell",
  "pc-keyboard",
  "pic8259",
  "spin 0.5.2",
  "uart_16550",
  "volatile 0.2.7",
  "x86_64",
+]
+
+[[package]]
+name = "pafos-abi"
+version = "0.1.0"
+
+[[package]]
+name = "pafos-shell"
+version = "0.1.0"
+dependencies = [
+ "libpafos",
 ]
 
 [[package]]

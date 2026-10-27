@@ -10,7 +10,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
+use pafos_abi::{Error, FileInfo, FsStats, MAX_NAME_LEN, Mode, Name};
 use spin::Mutex;
 
 pub const TMPFS_START: usize = 0x_5555_5555_0000;
@@ -20,71 +20,6 @@ pub const BLOCK_SIZE: usize = 512;
 // Hard limits keep the worst-case heap usage of the metadata small and known.
 pub const MAX_FILES: usize = 64;
 pub const MAX_OPEN: usize = 16;
-pub const MAX_NAME_LEN: usize = 32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// Read an existing file from the start.
-    Read,
-    /// Truncate an existing file to zero length and write from the start.
-    Write,
-    /// Write at the end of an existing file.
-    Append,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FsError {
-    Unavailable,
-    NotFound,
-    AlreadyExists,
-    InvalidName,
-    TooManyFiles,
-    TooManyOpen,
-    Busy,
-    NoSpace,
-    BadFd,
-    WrongMode,
-}
-
-impl fmt::Display for FsError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let msg = match self {
-            FsError::Unavailable => "file system not initialized",
-            FsError::NotFound => "no such file",
-            FsError::AlreadyExists => "file already exists",
-            FsError::InvalidName => "invalid file name",
-            FsError::TooManyFiles => "too many files",
-            FsError::TooManyOpen => "too many open files",
-            FsError::Busy => "file is open",
-            FsError::NoSpace => "no space left",
-            FsError::BadFd => "bad file descriptor",
-            FsError::WrongMode => "file not opened in this mode",
-        };
-        f.write_str(msg)
-    }
-}
-
-/// Plain-old-data description of a file, safe to copy out to a program.
-#[derive(Clone, Copy)]
-pub struct FileInfo {
-    name: [u8; MAX_NAME_LEN],
-    name_len: usize,
-    pub size: usize,
-}
-
-impl FileInfo {
-    pub fn name(&self) -> &str {
-        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?")
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct FsStats {
-    pub block_size: usize,
-    pub total_blocks: usize,
-    pub free_blocks: usize,
-    pub files: usize,
-}
 
 struct Blocks {
     data: &'static mut [u8],
@@ -162,15 +97,15 @@ pub unsafe fn init(start: usize, size: usize) {
     });
 }
 
-fn with_fs<T>(f: impl FnOnce(&mut Tmpfs) -> Result<T, FsError>) -> Result<T, FsError> {
-    FS.lock().as_mut().map_or(Err(FsError::Unavailable), f)
+fn with_fs<T>(f: impl FnOnce(&mut Tmpfs) -> Result<T, Error>) -> Result<T, Error> {
+    FS.lock().as_mut().map_or(Err(Error::Unavailable), f)
 }
 
-fn validate_name(name: &str) -> Result<(), FsError> {
+fn validate_name(name: &str) -> Result<(), Error> {
     let valid = !name.is_empty()
         && name.len() <= MAX_NAME_LEN
         && name.bytes().all(|b| b.is_ascii_graphic() && b != b'/');
-    if valid { Ok(()) } else { Err(FsError::InvalidName) }
+    if valid { Ok(()) } else { Err(Error::InvalidName) }
 }
 
 impl Tmpfs {
@@ -179,31 +114,31 @@ impl Tmpfs {
     }
 
     /// Files only come into existence here; `open` never creates them.
-    fn create(&mut self, name: &str) -> Result<(), FsError> {
+    fn create(&mut self, name: &str) -> Result<(), Error> {
         validate_name(name)?;
         if self.files.contains_key(name) {
-            return Err(FsError::AlreadyExists);
+            return Err(Error::AlreadyExists);
         }
         if self.files.len() >= MAX_FILES {
-            return Err(FsError::TooManyFiles);
+            return Err(Error::TooManyFiles);
         }
         self.files.insert(String::from(name), Inode { size: 0, blocks: Vec::new() });
         Ok(())
     }
 
-    fn open(&mut self, name: &str, mode: Mode) -> Result<usize, FsError> {
+    fn open(&mut self, name: &str, mode: Mode) -> Result<usize, Error> {
         validate_name(name)?;
         // One open handle per file keeps the semantics trivial: no concurrent writers.
         if self.is_open(name) {
-            return Err(FsError::Busy);
+            return Err(Error::Busy);
         }
         let fd = self
             .open_files
             .iter()
             .position(Option::is_none)
-            .ok_or(FsError::TooManyOpen)?;
+            .ok_or(Error::TooManyOpen)?;
 
-        let inode = self.files.get_mut(name).ok_or(FsError::NotFound)?;
+        let inode = self.files.get_mut(name).ok_or(Error::NotFound)?;
         let pos = match mode {
             Mode::Read => 0,
             Mode::Append => inode.size,
@@ -220,12 +155,12 @@ impl Tmpfs {
         Ok(fd)
     }
 
-    fn read(&mut self, fd: usize, buf: &mut [u8]) -> Result<usize, FsError> {
-        let file = self.open_files.get_mut(fd).and_then(Option::as_mut).ok_or(FsError::BadFd)?;
+    fn read(&mut self, fd: usize, buf: &mut [u8]) -> Result<usize, Error> {
+        let file = self.open_files.get_mut(fd).and_then(Option::as_mut).ok_or(Error::BadFd)?;
         if file.mode != Mode::Read {
-            return Err(FsError::WrongMode);
+            return Err(Error::WrongMode);
         }
-        let inode = self.files.get(&file.name).ok_or(FsError::NotFound)?;
+        let inode = self.files.get(&file.name).ok_or(Error::NotFound)?;
 
         let len = buf.len().min(inode.size - file.pos);
         let mut done = 0;
@@ -241,21 +176,21 @@ impl Tmpfs {
         Ok(len)
     }
 
-    fn write(&mut self, fd: usize, data: &[u8]) -> Result<usize, FsError> {
-        let file = self.open_files.get_mut(fd).and_then(Option::as_mut).ok_or(FsError::BadFd)?;
+    fn write(&mut self, fd: usize, data: &[u8]) -> Result<usize, Error> {
+        let file = self.open_files.get_mut(fd).and_then(Option::as_mut).ok_or(Error::BadFd)?;
         if file.mode == Mode::Read {
-            return Err(FsError::WrongMode);
+            return Err(Error::WrongMode);
         }
-        let inode = self.files.get_mut(&file.name).ok_or(FsError::NotFound)?;
+        let inode = self.files.get_mut(&file.name).ok_or(Error::NotFound)?;
 
         // Reserve every block up front, so a write either fully succeeds or changes nothing.
         let end = file.pos + data.len();
         let needed = end.div_ceil(BLOCK_SIZE).saturating_sub(inode.blocks.len());
         if needed > self.blocks.free_count {
-            return Err(FsError::NoSpace);
+            return Err(Error::NoSpace);
         }
         for _ in 0..needed {
-            let block = self.blocks.alloc().ok_or(FsError::NoSpace)?;
+            let block = self.blocks.alloc().ok_or(Error::NoSpace)?;
             inode.blocks.push(block);
         }
 
@@ -273,16 +208,16 @@ impl Tmpfs {
         Ok(data.len())
     }
 
-    fn close(&mut self, fd: usize) -> Result<(), FsError> {
-        self.open_files.get_mut(fd).and_then(Option::take).map(|_| ()).ok_or(FsError::BadFd)
+    fn close(&mut self, fd: usize) -> Result<(), Error> {
+        self.open_files.get_mut(fd).and_then(Option::take).map(|_| ()).ok_or(Error::BadFd)
     }
 
-    fn remove(&mut self, name: &str) -> Result<(), FsError> {
+    fn remove(&mut self, name: &str) -> Result<(), Error> {
         validate_name(name)?;
         if self.is_open(name) {
-            return Err(FsError::Busy);
+            return Err(Error::Busy);
         }
-        let inode = self.files.remove(name).ok_or(FsError::NotFound)?;
+        let inode = self.files.remove(name).ok_or(Error::NotFound)?;
         for block in inode.blocks {
             self.blocks.release(block);
         }
@@ -291,9 +226,7 @@ impl Tmpfs {
 
     fn file_at(&self, index: usize) -> Option<FileInfo> {
         let (name, inode) = self.files.iter().nth(index)?;
-        let mut info = FileInfo { name: [0; MAX_NAME_LEN], name_len: name.len(), size: inode.size };
-        info.name[..name.len()].copy_from_slice(name.as_bytes());
-        Some(info)
+        Some(FileInfo { name: Name::new(name), size: inode.size })
     }
 
     fn stats(&self) -> FsStats {
@@ -306,27 +239,27 @@ impl Tmpfs {
     }
 }
 
-pub fn create(name: &str) -> Result<(), FsError> {
+pub fn create(name: &str) -> Result<(), Error> {
     with_fs(|fs| fs.create(name))
 }
 
-pub fn open(name: &str, mode: Mode) -> Result<usize, FsError> {
+pub fn open(name: &str, mode: Mode) -> Result<usize, Error> {
     with_fs(|fs| fs.open(name, mode))
 }
 
-pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, FsError> {
+pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, Error> {
     with_fs(|fs| fs.read(fd, buf))
 }
 
-pub fn write(fd: usize, data: &[u8]) -> Result<usize, FsError> {
+pub fn write(fd: usize, data: &[u8]) -> Result<usize, Error> {
     with_fs(|fs| fs.write(fd, data))
 }
 
-pub fn close(fd: usize) -> Result<(), FsError> {
+pub fn close(fd: usize) -> Result<(), Error> {
     with_fs(|fs| fs.close(fd))
 }
 
-pub fn remove(name: &str) -> Result<(), FsError> {
+pub fn remove(name: &str) -> Result<(), Error> {
     with_fs(|fs| fs.remove(name))
 }
 
@@ -334,6 +267,6 @@ pub fn file_at(index: usize) -> Option<FileInfo> {
     FS.lock().as_ref()?.file_at(index)
 }
 
-pub fn stats() -> Result<FsStats, FsError> {
+pub fn stats() -> Result<FsStats, Error> {
     with_fs(|fs| Ok(fs.stats()))
 }

@@ -1,17 +1,17 @@
-use crate::sys::{self, Exit, File, FsError, Mode, print, println};
+#![no_std]
+
+extern crate alloc;
+
 use alloc::string::String;
 use alloc::vec::Vec;
+use libpafos::fs::{self, File, Mode};
+use libpafos::io::{self, LineEnd};
+use libpafos::{Error, Exit, print, println, process};
 
 const PROMPT: &str = "pafos> ";
 // Keeps prompt + input on a single 80-column VGA line, since backspace
 // cannot move back across line boundaries.
 const MAX_LINE: usize = 80 - PROMPT.len() - 1;
-
-enum LineEnd {
-    Enter,
-    Cancel,
-    Exit,
-}
 
 pub fn main(_args: &[&str]) -> Exit {
     println!("PAFOS shell. Type `help` for commands, Ctrl+D to exit.");
@@ -19,10 +19,10 @@ pub fn main(_args: &[&str]) -> Exit {
 
     loop {
         print!("{}", PROMPT);
-        match read_line(&mut line) {
+        match io::read_line(&mut line, MAX_LINE) {
             LineEnd::Enter => {}
             LineEnd::Cancel => continue,
-            LineEnd::Exit => return Exit::Success,
+            LineEnd::Eof => return Exit::Success,
         }
 
         let args: Vec<&str> = line.split_whitespace().collect();
@@ -41,7 +41,7 @@ pub fn main(_args: &[&str]) -> Exit {
                 Ok(())
             }
             "clear" => {
-                sys::clear_screen();
+                io::clear_screen();
                 Ok(())
             }
             "ls" => {
@@ -50,13 +50,10 @@ pub fn main(_args: &[&str]) -> Exit {
             }
             "df" => df(),
             "cat" => with_name(command, rest, cat),
-            "create" => with_name(command, rest, sys::create_file),
-            "rm" => with_name(command, rest, sys::remove_file),
+            "create" => with_name(command, rest, fs::create),
+            "rm" => with_name(command, rest, fs::remove),
             "editfile" => editfile(rest),
-            _ => {
-                println!("unknown command: {}", command);
-                Ok(())
-            }
+            _ => run_program(command, rest),
         };
         if let Err(err) = result {
             println!("{}: {}", command, err);
@@ -64,11 +61,23 @@ pub fn main(_args: &[&str]) -> Exit {
     }
 }
 
+/// Anything that is not a builtin is looked up as a program.
+fn run_program(name: &str, args: &[&str]) -> Result<(), Error> {
+    match process::exec(name, args) {
+        Ok(Exit::Success) => {}
+        Ok(Exit::Interrupted) => println!("^C"),
+        Ok(Exit::Error) => println!("{}: failed", name),
+        Err(Error::NotFound) => println!("unknown command: {}", name),
+        Err(err) => return Err(err),
+    }
+    Ok(())
+}
+
 fn with_name(
     command: &str,
     args: &[&str],
-    f: impl FnOnce(&str) -> Result<(), FsError>,
-) -> Result<(), FsError> {
+    f: impl FnOnce(&str) -> Result<(), Error>,
+) -> Result<(), Error> {
     match args {
         [name] => f(name),
         _ => {
@@ -80,8 +89,8 @@ fn with_name(
 
 fn ls() {
     let mut index = 0;
-    while let Some(info) = sys::file_at(index) {
-        println!("{:>8}  {}", info.size, info.name());
+    while let Some(info) = fs::entry_at(index) {
+        println!("{:>8}  {}", info.size, info.name.as_str());
         index += 1;
     }
     if index == 0 {
@@ -89,8 +98,8 @@ fn ls() {
     }
 }
 
-fn df() -> Result<(), FsError> {
-    let s = sys::fs_stats()?;
+fn df() -> Result<(), Error> {
+    let s = fs::stats()?;
     let used = s.total_blocks - s.free_blocks;
     println!(
         "{} files, blocks: {} used / {} free / {} total ({} bytes each)",
@@ -99,7 +108,7 @@ fn df() -> Result<(), FsError> {
     Ok(())
 }
 
-fn cat(name: &str) -> Result<(), FsError> {
+fn cat(name: &str) -> Result<(), Error> {
     let mut file = File::open(name, Mode::Read)?;
     let mut buf = [0u8; 64];
     let mut last = b'\n';
@@ -108,9 +117,7 @@ fn cat(name: &str) -> Result<(), FsError> {
         if n == 0 {
             break;
         }
-        for &byte in &buf[..n] {
-            print!("{}", byte as char);
-        }
+        io::write_stdout(&buf[..n]);
         last = buf[n - 1];
     }
     if last != b'\n' {
@@ -122,7 +129,7 @@ fn cat(name: &str) -> Result<(), FsError> {
 const EDITFILE_USAGE: &str = "usage: editfile <file> (addline <text> | write <text> | clear)";
 
 /// Changes an existing file; never creates one (that is what `create` is for).
-fn editfile(args: &[&str]) -> Result<(), FsError> {
+fn editfile(args: &[&str]) -> Result<(), Error> {
     let (name, action, words) = match args {
         [name, action, words @ ..] => (*name, *action, words),
         _ => {
@@ -148,49 +155,27 @@ fn editfile(args: &[&str]) -> Result<(), FsError> {
     Ok(())
 }
 
-fn read_line(line: &mut String) -> LineEnd {
-    line.clear();
-    loop {
-        match sys::read_char() {
-            '\n' => {
-                println!();
-                return LineEnd::Enter;
-            }
-            sys::CTRL_D => {
-                println!();
-                return LineEnd::Exit;
-            }
-            sys::CTRL_C => {
-                println!("^C");
-                sys::clear_stop();
-                return LineEnd::Cancel;
-            }
-            sys::BACKSPACE => {
-                if line.pop().is_some() {
-                    sys::backspace();
-                }
-            }
-            c if c.is_ascii_graphic() || c == ' ' => {
-                if line.len() < MAX_LINE {
-                    line.push(c);
-                    print!("{}", c);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 fn help() {
     println!("help         show this message");
     println!("echo <text>  print text");
     println!("clear        clear the screen");
     println!("exit         exit the shell (same as Ctrl+D)");
-    println!("ls           list files          df            file system usage");
-    println!("cat <f>      print file          create <f>    create empty file");
+    println!("ls           list files");
+    println!("df           file system usage");
+    println!("create <f>   create an empty file");
+    println!("cat <f>      print file");
     println!("rm <f>       delete file");
     println!("editfile <f> addline <text>      append a line to the file");
     println!("editfile <f> write <text>        replace file contents with the text");
     println!("editfile <f> clear               make the file empty");
+    print!("programs:   ");
+    let mut index = 0;
+    while let Some(name) = process::program_at(index) {
+        if name.as_str() != "shell" {
+            print!(" {}", name.as_str());
+        }
+        index += 1;
+    }
+    println!();
     println!("Ctrl+C cancels the current line.");
 }

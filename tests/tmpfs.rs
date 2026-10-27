@@ -9,7 +9,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
-use pafos::sys::{self, File, FsError, Mode};
+use libpafos::Error;
+use libpafos::fs::{self, File, Mode};
 
 entry_point!(main);
 
@@ -26,33 +27,24 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 fn read_all(name: &str) -> Vec<u8> {
-    let mut file = File::open(name, Mode::Read).unwrap();
-    let mut out = Vec::new();
-    let mut buf = [0u8; 100];
-    loop {
-        let n = file.read(&mut buf).unwrap();
-        if n == 0 {
-            return out;
-        }
-        out.extend_from_slice(&buf[..n]);
-    }
+    File::open(name, Mode::Read).unwrap().read_to_end().unwrap()
 }
 
 /// Creates `name` and opens it for writing.
 fn new_file(name: &str) -> File {
-    sys::create_file(name).unwrap();
+    fs::create(name).unwrap();
     File::open(name, Mode::Write).unwrap()
 }
 
 fn free_blocks() -> usize {
-    sys::fs_stats().unwrap().free_blocks
+    fs::stats().unwrap().free_blocks
 }
 
 #[test_case]
 fn write_then_read() {
     new_file("a").write(b"hello").unwrap();
     assert_eq!(read_all("a"), b"hello");
-    sys::remove_file("a").unwrap();
+    fs::remove("a").unwrap();
 }
 
 #[test_case]
@@ -65,7 +57,7 @@ fn spans_multiple_blocks_and_appends() {
     assert_eq!(data.len(), 1304);
     assert_eq!(&data[..1300], &first[..]);
     assert_eq!(&data[1300..], b"tail");
-    sys::remove_file("big").unwrap();
+    fs::remove("big").unwrap();
 }
 
 #[test_case]
@@ -73,7 +65,7 @@ fn write_mode_truncates() {
     new_file("t").write(b"long old content").unwrap();
     File::open("t", Mode::Write).unwrap().write(b"new").unwrap();
     assert_eq!(read_all("t"), b"new");
-    sys::remove_file("t").unwrap();
+    fs::remove("t").unwrap();
 }
 
 #[test_case]
@@ -81,22 +73,22 @@ fn remove_releases_blocks() {
     let before = free_blocks();
     new_file("r").write(&[7u8; 2000]).unwrap();
     assert_eq!(free_blocks(), before - 4);
-    sys::remove_file("r").unwrap();
+    fs::remove("r").unwrap();
     assert_eq!(free_blocks(), before);
 }
 
 #[test_case]
 fn reports_errors() {
-    assert_eq!(File::open("missing", Mode::Read).err(), Some(FsError::NotFound));
-    assert_eq!(sys::create_file(""), Err(FsError::InvalidName));
-    assert_eq!(sys::create_file("a/b"), Err(FsError::InvalidName));
+    assert_eq!(File::open("missing", Mode::Read).err(), Some(Error::NotFound));
+    assert_eq!(fs::create(""), Err(Error::InvalidName));
+    assert_eq!(fs::create("a/b"), Err(Error::InvalidName));
 
     let mut file = new_file("e");
-    assert_eq!(sys::remove_file("e"), Err(FsError::Busy));
-    assert_eq!(File::open("e", Mode::Read).err(), Some(FsError::Busy));
-    assert_eq!(file.read(&mut [0u8; 4]), Err(FsError::WrongMode));
+    assert_eq!(fs::remove("e"), Err(Error::Busy));
+    assert_eq!(File::open("e", Mode::Read).err(), Some(Error::Busy));
+    assert_eq!(file.read(&mut [0u8; 4]), Err(Error::WrongMode));
     drop(file);
-    sys::remove_file("e").unwrap();
+    fs::remove("e").unwrap();
 }
 
 #[test_case]
@@ -109,26 +101,26 @@ fn full_disk_is_an_error_not_a_panic() {
             break err;
         }
     };
-    assert_eq!(err, FsError::NoSpace);
+    assert_eq!(err, Error::NoSpace);
     assert_eq!(free_blocks(), 0);
     drop(file);
-    sys::remove_file("fill").unwrap();
+    fs::remove("fill").unwrap();
     assert_eq!(free_blocks(), before);
 }
 
 #[test_case]
 fn open_never_creates_files() {
-    assert_eq!(File::open("nope", Mode::Write).err(), Some(FsError::NotFound));
-    assert_eq!(File::open("nope", Mode::Append).err(), Some(FsError::NotFound));
-    assert!(sys::file_at(0).is_none());
+    assert_eq!(File::open("nope", Mode::Write).err(), Some(Error::NotFound));
+    assert_eq!(File::open("nope", Mode::Append).err(), Some(Error::NotFound));
+    assert!(fs::entry_at(0).is_none());
 }
 
 #[test_case]
 fn create_makes_empty_file_once() {
-    sys::create_file("c").unwrap();
+    fs::create("c").unwrap();
     assert_eq!(read_all("c"), b"");
-    assert_eq!(sys::create_file("c"), Err(FsError::AlreadyExists));
-    sys::remove_file("c").unwrap();
+    assert_eq!(fs::create("c"), Err(Error::AlreadyExists));
+    fs::remove("c").unwrap();
 }
 
 #[test_case]
@@ -139,5 +131,5 @@ fn append_adds_to_existing_content() {
     // Opening for write with nothing written is how a file gets cleared.
     drop(File::open("lines", Mode::Write).unwrap());
     assert_eq!(read_all("lines"), b"");
-    sys::remove_file("lines").unwrap();
+    fs::remove("lines").unwrap();
 }

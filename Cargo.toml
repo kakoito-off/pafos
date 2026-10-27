@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Philipp Oppermann <dev@phil-opp.com>"]
 edition = "2024"
 
+[workspace]
+members = ["abi", "libpafos", "programs/*"]
+
 [[test]]
 name = "should_panic"
 harness = false
@@ -21,6 +24,13 @@ uart_16550 = "0.6.0"
 pic8259 = "0.11.0"
 pc-keyboard = "0.7.0"
 linked_list_allocator = "0.9.0"
+pafos-abi = { path = "abi" }
+pafos-shell = { path = "programs/shell" }
+
+# The kernel itself never uses libpafos; tests do, to go through system calls
+# exactly like a program would.
+[dev-dependencies]
+libpafos = { path = "libpafos" }
 
 [dependencies.lazy_static]
 version = "1.0"

@@ -16,7 +16,7 @@ pub mod interrupts;
 pub mod memory;
 pub mod programs;
 pub mod serial;
-pub mod sys;
+pub mod syscall;
 mod tmpfs;
 pub mod vga_buffer;
 

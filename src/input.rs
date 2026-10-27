@@ -2,8 +2,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-pub const CTRL_C: char = '\u{3}';
-pub const CTRL_D: char = '\u{4}';
+use pafos_abi::keys::CTRL_C;
 
 const CAPACITY: usize = 128;
 
