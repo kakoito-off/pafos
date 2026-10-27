@@ -11,9 +11,12 @@ use core::panic::PanicInfo;
 
 pub mod allocator;
 pub mod gdt;
+mod input;
 pub mod interrupts;
 pub mod memory;
+pub mod programs;
 pub mod serial;
+pub mod sys;
 pub mod vga_buffer;
 
 /// Sets up everything the CPU needs before it can safely run kernel code:

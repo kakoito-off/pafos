@@ -4,23 +4,24 @@
 #![test_runner(pafos::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
-use pafos::println;
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
+use pafos::{println, programs, sys};
 
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
-    println!("Hello World{}", "!");
-
     pafos::init_core();
     pafos::init_memory(boot_info);
 
     #[cfg(test)]
     test_main();
 
-    println!("It did not crash!");
-    pafos::hlt_loop();
+    loop {
+        let exit = sys::run(programs::shell::main, &[]);
+        sys::clear_screen();
+        println!("shell exited ({:?}), starting a new one", exit);
+    }
 }
 
 /// This function is called on panic.
