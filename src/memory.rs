@@ -14,6 +14,8 @@ use x86_64::{
 pub struct Memory {
     pub phys_offset: VirtAddr,
     pub frames: BootInfoFrameAllocator,
+    /// The kernel's own level 4 table, the template for every address space.
+    pub kernel_p4: PhysFrame,
 }
 
 static MEMORY: Mutex<Option<Memory>> = Mutex::new(None);

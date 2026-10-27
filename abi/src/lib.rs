@@ -76,6 +76,11 @@ pub mod layout {
 /// Most arguments a program can be started with.
 pub const MAX_ARGS: usize = 32;
 
+/// How many ring 3 programs can be nested (the shell starting a program
+/// that starts a program, ...). Each level keeps its kernel frames on the
+/// one kernel stack while the program above it runs.
+pub const MAX_NESTING: usize = 8;
+
 pub const READ_KEY_NONBLOCK: usize = 1;
 
 /// Operations for [`nr::CONSOLE_CTL`].
@@ -115,10 +120,11 @@ pub enum Error {
     InvalidArgument = 11,
     WouldBlock = 12,
     NoSyscall = 13,
+    TooDeep = 14,
 }
 
 impl Error {
-    const ALL: [Error; 13] = [
+    const ALL: [Error; 14] = [
         Error::Unavailable,
         Error::NotFound,
         Error::AlreadyExists,
@@ -132,6 +138,7 @@ impl Error {
         Error::InvalidArgument,
         Error::WouldBlock,
         Error::NoSyscall,
+        Error::TooDeep,
     ];
 
     fn from_code(code: isize) -> Error {
@@ -155,6 +162,7 @@ impl fmt::Display for Error {
             Error::InvalidArgument => "invalid argument",
             Error::WouldBlock => "would block",
             Error::NoSyscall => "no such system call",
+            Error::TooDeep => "too many nested programs",
         };
         f.write_str(msg)
     }

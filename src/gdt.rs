@@ -5,31 +5,9 @@ use x86_64::structures::tss::TaskStateSegment;
 
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
-lazy_static! {
-    static ref TSS: TaskStateSegment = {
-        let mut tss = TaskStateSegment::new();
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 5;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-
-            let stack_start = VirtAddr::from_ptr(&raw const STACK);
-            let stack_end = stack_start + STACK_SIZE as u64;
-            stack_end
-        };
-        // RSP0: the CPU switches to this stack on any interrupt or system call
-        // that arrives while ring 3 code runs. One shared stack is enough while
-        // only one program runs at a time; nested programs in ring 3 will need
-        // one per process.
-        tss.privilege_stack_table[0] = {
-            const STACK_SIZE: usize = 4096 * 16;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-
-            let stack_start = VirtAddr::from_ptr(&raw const STACK);
-            stack_start + STACK_SIZE as u64
-        };
-        tss
-    };
-}
+/// Mutable because RSP0 changes every time a ring 3 program is entered (see
+/// [`rsp0_slot`]). The CPU reads it from memory on each ring 3 → ring 0 switch.
+static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
 lazy_static! {
     static ref GDT: (GlobalDescriptorTable, Selectors) = {
@@ -39,7 +17,8 @@ lazy_static! {
         // Selectors carry the descriptor's privilege level (RPL 3) already.
         let user_data_selector = gdt.append(Descriptor::user_data_segment());
         let user_code_selector = gdt.append(Descriptor::user_code_segment());
-        let tss_selector = gdt.append(Descriptor::tss_segment(&TSS));
+        // The TSS is a static, so it outlives the GDT.
+        let tss_selector = gdt.append(unsafe { Descriptor::tss_segment_unchecked(&raw const TSS) });
         (
             gdt,
             Selectors {
@@ -66,9 +45,30 @@ pub fn user_selectors() -> (SegmentSelector, SegmentSelector) {
     (GDT.1.user_code_selector, GDT.1.user_data_selector)
 }
 
+/// Where the TSS keeps RSP0: the stack the CPU switches to on an interrupt
+/// or system call from ring 3. There is no separate stack for that: right
+/// before entering a program the kernel stores its own current stack pointer
+/// here, so the program's traps land just below the kernel frames that are
+/// waiting for it. Nested programs thereby stack up on the one kernel stack.
+pub fn rsp0_slot() -> *mut u64 {
+    // `TaskStateSegment` is packed: the slot is not 8-byte aligned, which is
+    // fine for the CPU and for `read/write_unaligned`.
+    unsafe { (&raw mut TSS.privilege_stack_table[0]).cast() }
+}
+
 pub fn init() {
     use x86_64::instructions::segmentation::{CS, DS, ES, SS, Segment};
     use x86_64::instructions::tables::load_tss;
+
+    unsafe {
+        TSS.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 5;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+
+            let stack_start = VirtAddr::from_ptr(&raw const STACK);
+            stack_start + STACK_SIZE as u64
+        };
+    }
 
     GDT.0.load();
     unsafe {

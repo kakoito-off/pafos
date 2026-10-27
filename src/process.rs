@@ -8,16 +8,23 @@
 //!
 //! `run` is synchronous: it enters ring 3 with `iretq` and comes back when the
 //! program calls EXIT or the CPU faults in ring 3. Both paths jump back to the
-//! kernel stack saved on entry, abandoning the RSP0 stack the trap ran on.
+//! kernel stack pointer saved on entry, discarding the frames of the trap.
+//!
+//! Programs nest without any scheduling: when a program calls EXEC, the kernel
+//! frames of that system call stay on the kernel stack and the child is
+//! entered from there, with RSP0 set below them (see `gdt::rsp0_slot`). Each
+//! level has its own saved stack pointer; EXIT and faults always return to
+//! the innermost one.
 
 use crate::memory::{self, Memory};
 use crate::{gdt, println};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::arch::naked_asm;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use pafos_abi::layout::{USER_BASE, USER_END, USER_STACK_SIZE, USER_STACK_TOP};
-use pafos_abi::{Error, Exit, MAX_ARGS, Name, StrRef};
+use pafos_abi::{Error, Exit, MAX_ARGS, MAX_NESTING, Name, StrRef};
 use spin::Mutex;
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::{
@@ -25,38 +32,45 @@ use x86_64::structures::paging::{
 };
 use x86_64::{VirtAddr, instructions::interrupts};
 
-/// One ring 3 program at a time for now: there is a single RSP0 stack and a
-/// single saved kernel context. Nested programs need one of each per process.
-static RUNNING: AtomicBool = AtomicBool::new(false);
-/// Kernel stack pointer saved by `enter_user`, for `resume_kernel`.
-static KERNEL_RSP: AtomicU64 = AtomicU64::new(0);
-static CURRENT: Mutex<Name> = Mutex::new(Name::EMPTY);
+/// Number of ring 3 programs currently started (each waiting for the next,
+/// except the innermost one, which runs).
+static DEPTH: AtomicUsize = AtomicUsize::new(0);
+/// Per level: kernel stack pointer saved by `enter_user`, for `resume_kernel`.
+static KERNEL_RSP: [AtomicU64; MAX_NESTING] = [const { AtomicU64::new(0) }; MAX_NESTING];
+/// Per level: program name, for messages.
+static NAMES: Mutex<[Name; MAX_NESTING]> = Mutex::new([Name::EMPTY; MAX_NESTING]);
 
 const USER_P4_INDEX: usize = (USER_BASE >> 39) as usize & 0x1ff;
 /// Argument strings plus the `StrRef` array must fit in this part of the stack.
 const MAX_ARGS_BYTES: u64 = 4096;
 
 pub fn run(name: &str, image: &[u8], args: &[&str]) -> Result<Exit, Error> {
-    if RUNNING.swap(true, Ordering::SeqCst) {
-        return Err(Error::Busy);
+    let level = DEPTH.load(Ordering::SeqCst);
+    if level == MAX_NESTING {
+        return Err(Error::TooDeep);
     }
-    *CURRENT.lock() = Name::new(name);
-    let result = run_in_new_space(image, args);
-    RUNNING.store(false, Ordering::SeqCst);
-    result
-}
-
-fn run_in_new_space(image: &[u8], args: &[&str]) -> Result<Exit, Error> {
     let elf = Elf::parse(image).ok_or(Error::InvalidArgument)?;
     if args.len() > MAX_ARGS {
         return Err(Error::InvalidArgument);
     }
+    // The arguments may live in the calling program's memory, which is not
+    // mapped any more once the child's address space is active.
+    let args: Vec<String> = args.iter().map(|&arg| String::from(arg)).collect();
 
-    let (kernel_p4, cr3_flags) = Cr3::read();
+    NAMES.lock()[level] = Name::new(name);
+    DEPTH.store(level + 1, Ordering::SeqCst);
+    let result = run_in_new_space(level, image, &elf, &args);
+    DEPTH.store(level, Ordering::SeqCst);
+    result
+}
+
+fn run_in_new_space(level: usize, image: &[u8], elf: &Elf, args: &[String]) -> Result<Exit, Error> {
+    // The caller's address space: the kernel's, or the parent program's.
+    let (parent_p4, cr3_flags) = Cr3::read();
     let p4 = memory::with(new_address_space).ok_or(Error::NoSpace)?;
     unsafe { Cr3::write(p4, cr3_flags) };
 
-    let result = memory::with(|m| load(m, p4, &elf, image)).and_then(|()| {
+    let result = memory::with(|m| load(m, p4, elf, image)).and_then(|()| {
         memory::with(|m| map_stack(m, p4))?;
         let (rsp, argv) = push_args(args)?;
         let (code, data) = gdt::user_selectors();
@@ -69,25 +83,30 @@ fn run_in_new_space(image: &[u8], args: &[&str]) -> Result<Exit, Error> {
             argc: args.len() as u64,
             argv,
         };
-        let code = unsafe { enter_user(&entry, KERNEL_RSP.as_ptr()) };
+        let rsp0 = gdt::rsp0_slot();
+        let parent_rsp0 = unsafe { rsp0.read_unaligned() };
+        let code = unsafe { enter_user(&entry, KERNEL_RSP[level].as_ptr(), rsp0) };
+        // Back at this level: the parent's traps go above our frames again.
+        unsafe { rsp0.write_unaligned(parent_rsp0) };
         // A fault handler may have brought us back with interrupts off.
         interrupts::enable();
         Ok(Exit::from_raw(code as usize))
     });
 
-    unsafe { Cr3::write(kernel_p4, cr3_flags) };
+    unsafe { Cr3::write(parent_p4, cr3_flags) };
     memory::with(|m| free_address_space(m, p4));
     result
 }
 
-/// Called for the EXIT system call from ring 3.
+/// Called for the EXIT system call from ring 3: ends the innermost program.
 pub fn exit(code: usize) -> ! {
-    unsafe { resume_kernel(KERNEL_RSP.load(Ordering::SeqCst), code as u64) }
+    let level = DEPTH.load(Ordering::SeqCst) - 1;
+    unsafe { resume_kernel(KERNEL_RSP[level].load(Ordering::SeqCst), code as u64) }
 }
 
 /// Called by CPU exception handlers when the fault happened in ring 3.
 pub fn kill(reason: fmt::Arguments) -> ! {
-    let name = *CURRENT.lock();
+    let name = NAMES.lock()[DEPTH.load(Ordering::SeqCst) - 1];
     println!("{}: killed ({})", name.as_str(), reason);
     exit(Exit::Crashed as usize)
 }
@@ -96,8 +115,9 @@ pub fn kill(reason: fmt::Arguments) -> ! {
 
 fn new_address_space(m: &mut Memory) -> Option<PhysFrame> {
     let p4 = m.zeroed_frame()?;
-    let (kernel_p4, _) = Cr3::read();
-    let (new, kernel) = unsafe { (m.table(p4), m.table(kernel_p4)) };
+    // From the kernel's table, not the active one: that may be the parent
+    // program's, with its user region in it.
+    let (new, kernel) = unsafe { (m.table(p4), m.table(m.kernel_p4)) };
     for (i, entry) in kernel.iter().enumerate() {
         new[i] = entry.clone();
     }
@@ -204,7 +224,7 @@ fn map_stack(m: &mut Memory, p4: PhysFrame) -> Result<(), Error> {
 
 /// Copies the arguments to the top of the (already active) user stack.
 /// Returns the initial stack pointer and the address of the `StrRef` array.
-fn push_args(args: &[&str]) -> Result<(u64, u64), Error> {
+fn push_args(args: &[String]) -> Result<(u64, u64), Error> {
     let total: u64 = args.iter().map(|a| a.len() as u64 + 16).sum();
     if total > MAX_ARGS_BYTES {
         return Err(Error::InvalidArgument);
@@ -239,10 +259,11 @@ struct UserEntry {
     argv: u64,
 }
 
-/// Saves the callee-saved registers and RSP to `*saved_rsp`, then `iretq`s
-/// into ring 3. "Returns" the exit code when `resume_kernel` jumps back.
+/// Saves the callee-saved registers and RSP to `*saved_rsp`, makes the same
+/// RSP the program's RSP0 (`*rsp0`), then `iretq`s into ring 3. "Returns" the
+/// exit code when `resume_kernel` jumps back.
 #[unsafe(naked)]
-unsafe extern "C" fn enter_user(entry: *const UserEntry, saved_rsp: *mut u64) -> u64 {
+unsafe extern "C" fn enter_user(entry: *const UserEntry, saved_rsp: *mut u64, rsp0: *mut u64) -> u64 {
     naked_asm!(
         "push rbx",
         "push rbp",
@@ -251,6 +272,9 @@ unsafe extern "C" fn enter_user(entry: *const UserEntry, saved_rsp: *mut u64) ->
         "push r14",
         "push r15",
         "mov [rsi], rsp",
+        // The program's traps start below everything pushed so far (the
+        // iretq frame pushed next is consumed before any trap can happen).
+        "mov [rdx], rsp",
         // Interrupt frame for iretq: SS, RSP, RFLAGS, CS, RIP.
         "push qword ptr [rdi + 24]",
         "push qword ptr [rdi + 8]",

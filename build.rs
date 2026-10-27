@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Programs built as executables; each sits behind a feature of the same name.
-const PROGRAMS: &[&str] = &["calc", "time", "timer", "fault"];
+const PROGRAMS: &[&str] = &["shell", "calc", "time", "timer", "fault"];
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());

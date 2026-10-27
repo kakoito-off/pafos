@@ -56,7 +56,8 @@ pub fn init_memory(boot_info: &'static BootInfo) {
     // The region was just mapped and nothing else uses it; the heap is ready.
     unsafe { tmpfs::init(tmpfs::TMPFS_START, tmpfs::TMPFS_SIZE) };
 
-    memory::install(memory::Memory { phys_offset: phys_mem_offset, frames: frame_allocator });
+    let (kernel_p4, _) = x86_64::registers::control::Cr3::read();
+    memory::install(memory::Memory { phys_offset: phys_mem_offset, frames: frame_allocator, kernel_p4 });
 }
 pub trait Testable {
     fn run(&self) -> ();

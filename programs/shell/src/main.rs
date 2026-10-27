@@ -1,4 +1,5 @@
 #![no_std]
+#![no_main]
 
 extern crate alloc;
 
@@ -13,7 +14,9 @@ const PROMPT: &str = "pafos> ";
 // cannot move back across line boundaries.
 const MAX_LINE: usize = 80 - PROMPT.len() - 1;
 
-pub fn main(_args: &[&str]) -> Exit {
+libpafos::entry!(main);
+
+fn main(_args: &[&str]) -> Exit {
     println!("PAFOS shell. Type `help` for commands, Ctrl+D to exit.");
     let mut line = String::new();
 

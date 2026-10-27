@@ -134,6 +134,21 @@ fn ring3_faults_kill_only_the_program() {
 }
 
 #[test_case]
+fn ring3_programs_nest_up_to_the_limit() {
+    // fault nest checks the limit itself; Success means TooDeep came
+    // exactly at MAX_NESTING and every level got control back intact.
+    assert_eq!(run("fault", &["nest"]), Exit::Success);
+    // Started at the wrong level, the limit comes at the wrong level.
+    assert_eq!(run("fault", &["nest", "9"]), Exit::Error);
+}
+
+#[test_case]
+fn ring3_child_crash_returns_to_the_parent() {
+    assert_eq!(run("fault", &["nestcrash"]), Exit::Success);
+    assert_eq!(run("time", &[]), Exit::Success);
+}
+
+#[test_case]
 fn ring3_pointers_to_kernel_memory_are_refused() {
     assert_eq!(run("fault", &["badptr"]), Exit::Success);
 }
@@ -153,6 +168,8 @@ fn ring3_programs_give_back_their_memory() {
         run("calc", &["1+1"]);
         run("timer", &["show"]);
         process::exec("fault", &["null"]).unwrap();
+        run("fault", &["nest"]);
+        run("fault", &["nestcrash"]);
     }
     assert_eq!(pafos::memory::frames_in_use(), before);
 }

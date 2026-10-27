@@ -1,35 +1,24 @@
 //! Installed programs.
 //!
 //! Each program is its own crate under `programs/` that depends only on
-//! `libpafos`, so it cannot touch kernel internals. Two kinds for now:
-//! - linked into the kernel and started by a plain call, still in ring 0
-//!   (only `shell`);
-//! - separate ELF executables built by `build.rs`, embedded here and run in
-//!   ring 3 in their own address space (everything else).
+//! `libpafos`, so it cannot touch kernel internals. `build.rs` builds each
+//! one into an ELF executable, embedded here, and `process::run` starts it in
+//! ring 3 in its own address space.
 
 use crate::{input, process};
 use pafos_abi::{Error, Exit, Name};
 
-type Main = fn(args: &[&str]) -> Exit;
-
-// Unused variants and macro in builds without (some) programs.
-#[allow(dead_code)]
-enum Program {
-    Linked(Main),
-    Executable(&'static [u8]),
-}
-
-/// An executable built by build.rs.
-#[allow(unused_macros)]
+/// The ELF file of a program built by build.rs.
+#[allow(unused_macros)] // in builds without programs
 macro_rules! executable {
     ($name:literal) => {
-        Program::Executable(include_bytes!(concat!(env!("OUT_DIR"), "/", $name)))
+        include_bytes!(concat!(env!("OUT_DIR"), "/", $name))
     };
 }
 
-static PROGRAMS: &[(&str, Program)] = &[
+static PROGRAMS: &[(&str, &[u8])] = &[
     #[cfg(feature = "shell")]
-    ("shell", Program::Linked(pafos_shell::main)),
+    ("shell", executable!("shell")),
     #[cfg(feature = "calc")]
     ("calc", executable!("calc")),
     #[cfg(feature = "time")]
@@ -42,12 +31,9 @@ static PROGRAMS: &[(&str, Program)] = &[
 
 /// Starts a program and waits for it to finish.
 pub fn run(name: &str, args: &[&str]) -> Result<Exit, Error> {
-    let (_, program) = PROGRAMS.iter().find(|(n, _)| *n == name).ok_or(Error::NotFound)?;
+    let (_, image) = PROGRAMS.iter().find(|(n, _)| *n == name).ok_or(Error::NotFound)?;
     input::clear_stop();
-    let exit = match program {
-        Program::Linked(main) => Ok(main(args)),
-        Program::Executable(image) => process::run(name, image, args),
-    };
+    let exit = process::run(name, image, args);
     input::clear_stop();
     exit
 }

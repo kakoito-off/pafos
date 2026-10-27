@@ -5,7 +5,7 @@
 //! [`dispatch`], together with the privilege level of the caller. Calls from
 //! ring 3 arrive on the TSS's RSP0 stack, and every pointer they pass is
 //! checked against the program's own mappings before the kernel touches it.
-//! Programs linked into the kernel (ring 0) are trusted.
+//! Calls from ring 0 (the kernel's own tests) are trusted.
 
 use crate::{clock, input, memory, process, programs, tmpfs, vga_buffer};
 use alloc::vec::Vec;
@@ -97,7 +97,7 @@ fn dispatch(c: Caller, nr: usize, a: [usize; 4]) -> Result<usize, Error> {
         nr::EXEC => exec(c, a),
         nr::PROGRAM_AT => fill(c, a[1], programs::name_at(a[0])),
         nr::EXIT if c.user => process::exit(a[0]),
-        // A ring 0 program has nowhere to exit to; it returns from `main`.
+        // Ring 0 code has nowhere to exit to.
         nr::EXIT => Err(Error::InvalidArgument),
         _ => Err(Error::NoSyscall),
     }
@@ -147,10 +147,6 @@ fn fill<T: Copy>(c: Caller, ptr: usize, value: Option<T>) -> Result<usize, Error
 }
 
 fn exec(c: Caller, a: [usize; 4]) -> Result<usize, Error> {
-    // Starting programs from ring 3 needs a kernel stack per process.
-    if c.user {
-        return Err(Error::Busy);
-    }
     let name = c.str(a[0], a[1])?;
     let argv = c.slice::<StrRef>(a[2], a[3])?;
     let args = argv.iter().map(|arg| c.str(arg.ptr as usize, arg.len)).collect::<Result<Vec<_>, _>>()?;
@@ -159,7 +155,7 @@ fn exec(c: Caller, a: [usize; 4]) -> Result<usize, Error> {
 
 // --- Access to program memory. -------------------------------------------
 
-/// Who made the call. Programs in ring 0 share the kernel's address space, so
+/// Who made the call. Ring 0 callers share the kernel's address space, so
 /// their pointers are only checked for null and alignment. For ring 3 the
 /// whole range must also be mapped for user access in the program's own
 /// region (and writable where the kernel writes), so a bad pointer is an
