@@ -25,15 +25,16 @@ pic8259 = "0.11.0"
 pc-keyboard = "0.7.0"
 linked_list_allocator = "0.9.0"
 pafos-abi = { path = "abi" }
-pafos-shell = { path = "programs/shell" }
+pafos-shell = { path = "programs/shell", optional = true }
 pafos-calc = { path = "programs/calc", optional = true }
 pafos-time = { path = "programs/time", optional = true }
 pafos-timer = { path = "programs/timer", optional = true }
 
-# Optional programs; `cargo build --no-default-features` gives a kernel
-# with only the shell.
+# Every program is optional; `cargo build --no-default-features` gives a
+# kernel with no programs at all, which boots to a blank screen.
 [features]
-default = ["calc", "time", "timer"]
+default = ["shell", "calc", "time", "timer"]
+shell = ["dep:pafos-shell"]
 calc = ["dep:pafos-calc"]
 time = ["dep:pafos-time"]
 timer = ["dep:pafos-timer"]

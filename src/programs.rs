@@ -12,6 +12,7 @@ use pafos_abi::{Error, Exit, Name};
 type Main = fn(args: &[&str]) -> Exit;
 
 static PROGRAMS: &[(&str, Main)] = &[
+    #[cfg(feature = "shell")]
     ("shell", pafos_shell::main),
     #[cfg(feature = "calc")]
     ("calc", pafos_calc::main),

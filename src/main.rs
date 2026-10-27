@@ -18,7 +18,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     test_main();
 
     loop {
-        let exit = programs::run("shell", &[]);
+        let exit = match programs::run("shell", &[]) {
+            Ok(exit) => exit,
+            // No shell in this build: nothing to run, idle on a blank screen.
+            Err(_) => {
+                vga_buffer::clear_screen();
+                pafos::hlt_loop();
+            }
+        };
         vga_buffer::clear_screen();
         println!("shell exited ({:?}), starting a new one", exit);
     }
