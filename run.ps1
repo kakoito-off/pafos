@@ -2,18 +2,22 @@
 .SYNOPSIS
     Build (if needed) and run pafos in QEMU.
 
+.DESCRIPTION
+    Extra arguments go to cargo, e.g. to pick which programs are built in.
+
 .EXAMPLE
     .\run.ps1
+
+.EXAMPLE
+    .\run.ps1 --no-default-features --features shell,calc
 #>
 
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 Set-Location $PSScriptRoot
 
-Write-Host "Building image..." -ForegroundColor Cyan
-cargo bootimage
+& "$PSScriptRoot\build.ps1" @args
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build failed." -ForegroundColor Red
     exit 1
 }
 
