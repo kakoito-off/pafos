@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::string::String;
 use libpafos::io::{self, LineEnd};
 use libpafos::{Exit, print, println};
-use pafos_calc::eval;
+use pafos_calc_eval::eval;
 
 const PROMPT: &str = "calc> ";
 const MAX_LINE: usize = 80 - PROMPT.len() - 1;

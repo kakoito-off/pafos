@@ -12,7 +12,7 @@ use core::panic::PanicInfo;
 use libpafos::fs::{self, File, Mode};
 use libpafos::time::{Elapsed, uptime_ms};
 use libpafos::{Error, Exit, process};
-use pafos_calc::{CalcError, eval};
+use pafos_calc_eval::{CalcError, eval};
 
 entry_point!(main);
 

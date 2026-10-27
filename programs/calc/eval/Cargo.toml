@@ -1,0 +1,7 @@
+[package]
+name = "pafos-calc-eval"
+version = "0.1.0"
+edition = "2024"
+
+# The evaluator behind `calc`, with no dependencies, so the kernel's tests
+# can check it directly.

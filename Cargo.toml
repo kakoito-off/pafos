@@ -5,7 +5,7 @@ authors = ["Philipp Oppermann <dev@phil-opp.com>"]
 edition = "2024"
 
 [workspace]
-members = ["abi", "libpafos", "programs/*"]
+members = ["abi", "libpafos", "programs/*", "programs/calc/eval"]
 
 [[test]]
 name = "should_panic"
@@ -26,23 +26,24 @@ pc-keyboard = "0.7.0"
 linked_list_allocator = "0.9.0"
 pafos-abi = { path = "abi" }
 
-# Every program is optional; `cargo build --no-default-features` gives a
-# kernel with no programs at all, which boots to a blank screen.
-# Each program is a separate executable run in ring 3 (built by build.rs).
+# Programs: every folder in programs/ is one, and its feature here (same name)
+# puts it into the image. build.rs finds and builds them; the kernel's code
+# never names a program. `cargo build --no-default-features` gives a kernel
+# with no programs at all, which boots to a blank screen.
 [features]
-default = ["shell", "calc", "time", "timer", "fault"]
+default = ["shell", "calc", "time", "timer", "fault", "zeros"]
 shell = []
 calc = []
 time = []
 timer = []
 fault = []
+zeros = []
 
 # The kernel itself never uses libpafos; tests do, to go through system calls
 # exactly like a program would.
 [dev-dependencies]
 libpafos = { path = "libpafos" }
-# Only the evaluator library, to test it directly.
-pafos-calc = { path = "programs/calc" }
+pafos-calc-eval = { path = "programs/calc/eval" }
 
 [build-dependencies]
 pafos-abi = { path = "abi" }

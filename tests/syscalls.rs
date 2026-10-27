@@ -44,7 +44,7 @@ fn null_pointers_are_rejected() {
 
 #[test_case]
 fn programs_are_listed_and_unknown_ones_not_found() {
-    assert_eq!(process::program_at(0).map(|n| n.as_str() == "shell"), Some(true));
+    assert!((0..).map_while(process::program_at).any(|n| n.as_str() == "shell"));
     assert!(process::program_at(1000).is_none());
     assert_eq!(process::exec("no-such-program", &[]), Err(Error::NotFound));
 }

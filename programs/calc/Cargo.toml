@@ -3,21 +3,6 @@ name = "pafos-calc"
 version = "0.1.0"
 edition = "2024"
 
-# The library part (src/lib.rs) is the evaluator alone, with no dependencies,
-# so the kernel's tests can check it directly.
-
-# Built as its own ring 3 executable by the kernel's build.rs, which enables
-# `rt`. Without it there is no `_start`/panic handler, so the binary is
-# skipped in ordinary workspace builds.
-[[bin]]
-name = "calc"
-path = "src/main.rs"
-required-features = ["rt"]
-test = false
-bench = false
-
-[features]
-rt = ["libpafos/rt"]
-
 [dependencies]
-libpafos = { path = "../../libpafos" }
+libpafos = { path = "../../libpafos", features = ["rt"] }
+pafos-calc-eval = { path = "eval" }

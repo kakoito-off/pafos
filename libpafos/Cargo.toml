@@ -8,7 +8,7 @@ pafos-abi = { path = "../abi" }
 linked_list_allocator = { version = "0.9.0", optional = true }
 
 [features]
-# Runtime for programs built as their own ring 3 executables: `_start`,
-# `exit`, panic handler and a heap. Programs linked into the kernel must
-# not enable it (the kernel has its own panic handler and allocator).
+# Runtime for programs: `_start`, `exit`, panic handler and a heap. Every
+# program enables it; the kernel's tests use libpafos without it (the
+# kernel has its own panic handler and allocator).
 rt = ["dep:linked_list_allocator"]
