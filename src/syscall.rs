@@ -1,24 +1,66 @@
-//! System call dispatcher: the only way programs reach the kernel.
+//! System calls: the only way programs reach the kernel.
 //!
-//! Programs call `libpafos::raw::syscall`, which today calls
-//! [`pafos_syscall`] directly (everything runs in ring 0). With ring 3 an
-//! `int 0x80` handler will pass the saved registers to [`dispatch`] instead,
-//! and the `user_*` helpers will start checking that pointers lie in the
-//! program's memory. The calls themselves stay the same.
+//! A program executes `int 0x80` (see `pafos_abi::SYSCALL_VECTOR` for the
+//! register convention). [`entry`] saves registers and hands them to
+//! [`dispatch`]. Programs still run in ring 0 for now; once they run in
+//! ring 3 the CPU switches to the TSS's RSP0 stack on the way in, and the
+//! `user_*` helpers start checking that pointers lie in the program's memory.
 
 use crate::{clock, input, programs, tmpfs, vga_buffer};
 use alloc::vec::Vec;
 use pafos_abi::{
     Error, FIRST_FILE_FD, FsStats, Mode, READ_KEY_NONBLOCK, STDOUT, StrRef, console, encode, nr,
 };
+use core::arch::naked_asm;
 use x86_64::instructions::interrupts;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn pafos_syscall(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
+/// Handler for the system call vector.
+///
+/// The CPU has pushed the interrupt frame (SS, RSP, RFLAGS, CS, RIP), which
+/// leaves RSP at 8 mod 16. Caller-saved registers are saved here because the
+/// ABI promises the program that only `rax` changes; callee-saved ones are
+/// preserved by `handle` itself.
+#[unsafe(naked)]
+pub extern "C" fn entry() {
+    naked_asm!(
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        // 5 + 8 pushes so far: realign to 16 bytes for the call.
+        "sub rsp, 8",
+        // The C ABI requires the direction flag clear; the program may have set it.
+        "cld",
+        // Syscall registers -> C arguments: handle(rax, rdi, rsi, rdx, r10).
+        "mov r8, r10",
+        "mov rcx, rdx",
+        "mov rdx, rsi",
+        "mov rsi, rdi",
+        "mov rdi, rax",
+        "call {handle}",
+        "add rsp, 8",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "iretq",
+        handle = sym handle,
+    );
+}
+
+extern "C" fn handle(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
     encode(dispatch(nr, [a0, a1, a2, a3]))
 }
 
-pub fn dispatch(nr: usize, a: [usize; 4]) -> Result<usize, Error> {
+fn dispatch(nr: usize, a: [usize; 4]) -> Result<usize, Error> {
     match nr {
         nr::READ_KEY => read_key(a[0]),
         nr::STOP_REQUESTED => Ok(input::stop_requested() as usize),

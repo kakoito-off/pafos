@@ -1,22 +1,29 @@
-//! The one place where a program crosses into the kernel.
+//! The one place where a program crosses into the kernel: `int 0x80`.
 //!
-//! Today programs run in ring 0 and this is a plain call of a kernel
-//! function. With ring 3 only the body of [`syscall`] changes: the number
-//! and arguments go into registers and `int 0x80` traps into the kernel's
-//! dispatcher. Nothing above this module notices.
+//! Register convention: see `pafos_abi::SYSCALL_VECTOR`.
 
-use pafos_abi::{Error, decode};
-
-unsafe extern "C" {
-    /// Defined by the kernel (`syscall.rs`).
-    fn pafos_syscall(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize;
-}
+use core::arch::asm;
+use pafos_abi::{Error, SYSCALL_VECTOR, decode};
 
 /// # Safety
 /// Pointer arguments must be valid for what the call `nr` does with them
 /// (see `pafos_abi::nr`).
 pub unsafe fn syscall(nr: usize, args: [usize; 4]) -> Result<usize, Error> {
-    decode(unsafe { pafos_syscall(nr, args[0], args[1], args[2], args[3]) })
+    let ret: isize;
+    // No `nostack`: in ring 0 the CPU pushes the interrupt frame onto the
+    // current stack. No `nomem`: the kernel reads and writes our buffers.
+    unsafe {
+        asm!(
+            "int {vector}",
+            vector = const SYSCALL_VECTOR,
+            inlateout("rax") nr as isize => ret,
+            in("rdi") args[0],
+            in("rsi") args[1],
+            in("rdx") args[2],
+            in("r10") args[3],
+        );
+    }
+    decode(ret)
 }
 
 /// For calls whose arguments are plain numbers, so nothing can go wrong.

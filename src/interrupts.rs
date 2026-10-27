@@ -3,6 +3,7 @@ use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::{PrivilegeLevel, VirtAddr};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -35,6 +36,14 @@ lazy_static! {
         }
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
+        // DPL 3 so ring 3 code may `int 0x80`; a trap gate (interrupts stay
+        // enabled) because a system call can run for long, e.g. `exec`.
+        unsafe {
+            idt[pafos_abi::SYSCALL_VECTOR]
+                .set_handler_addr(VirtAddr::new(crate::syscall::entry as *const () as u64))
+                .set_privilege_level(PrivilegeLevel::Ring3)
+                .disable_interrupts(false);
+        }
         idt
     };
 }

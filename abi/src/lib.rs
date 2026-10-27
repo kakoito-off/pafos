@@ -2,12 +2,19 @@
 //! codes and the plain-old-data types that cross the boundary.
 //!
 //! This is the only crate both sides share. Everything here is a plain
-//! integer or `#[repr(C)]`, so it keeps its meaning once a system call goes
-//! through `int 0x80` instead of a function call.
+//! integer or `#[repr(C)]`, so it means the same on both sides of the
+//! ring 3 / ring 0 boundary.
 
 #![no_std]
 
 use core::fmt;
+
+/// Interrupt vector of a system call.
+///
+/// Registers: `rax` = call number, `rdi`, `rsi`, `rdx`, `r10` = arguments
+/// (as in Linux, so `rcx`/`r11` stay free for a future `syscall` instruction).
+/// The result comes back in `rax`; every other register is preserved.
+pub const SYSCALL_VECTOR: u8 = 0x80;
 
 /// System call numbers.
 ///
