@@ -2,6 +2,7 @@
 //! line `start <uptime in ms>`, so it can be inspected with `cat timer`.
 
 #![no_std]
+#![no_main]
 
 extern crate alloc;
 
@@ -12,7 +13,9 @@ use libpafos::{Error, Exit, println};
 
 const FILE: &str = "timer";
 
-pub fn main(args: &[&str]) -> Exit {
+libpafos::entry!(main);
+
+fn main(args: &[&str]) -> Exit {
     let result = match args {
         ["start"] => start(),
         ["show"] => show(),

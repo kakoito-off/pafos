@@ -3,9 +3,9 @@
 //! Each program is its own crate under `programs/` that depends only on
 //! `libpafos`, so it cannot touch kernel internals. Two kinds for now:
 //! - linked into the kernel and started by a plain call, still in ring 0
-//!   (`shell`, `calc`, `timer`);
+//!   (only `shell`);
 //! - separate ELF executables built by `build.rs`, embedded here and run in
-//!   ring 3 in their own address space (`time`, `fault`).
+//!   ring 3 in their own address space (everything else).
 
 use crate::{input, process};
 use pafos_abi::{Error, Exit, Name};
@@ -31,11 +31,11 @@ static PROGRAMS: &[(&str, Program)] = &[
     #[cfg(feature = "shell")]
     ("shell", Program::Linked(pafos_shell::main)),
     #[cfg(feature = "calc")]
-    ("calc", Program::Linked(pafos_calc::main)),
+    ("calc", executable!("calc")),
     #[cfg(feature = "time")]
     ("time", executable!("time")),
     #[cfg(feature = "timer")]
-    ("timer", Program::Linked(pafos_timer::main)),
+    ("timer", executable!("timer")),
     #[cfg(feature = "fault")]
     ("fault", executable!("fault")),
 ];

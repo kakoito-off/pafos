@@ -150,6 +150,8 @@ fn ring3_programs_give_back_their_memory() {
     let before = pafos::memory::frames_in_use();
     for _ in 0..20 {
         run("time", &[]);
+        run("calc", &["1+1"]);
+        run("timer", &["show"]);
         process::exec("fault", &["null"]).unwrap();
     }
     assert_eq!(pafos::memory::frames_in_use(), before);

@@ -79,7 +79,6 @@ dependencies = [
  "pafos-abi",
  "pafos-calc",
  "pafos-shell",
- "pafos-timer",
  "pc-keyboard",
  "pic8259",
  "spin 0.5.2",

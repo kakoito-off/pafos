@@ -3,5 +3,18 @@ name = "pafos-timer"
 version = "0.1.0"
 edition = "2024"
 
+# Built as its own ring 3 executable by the kernel's build.rs, which enables
+# `rt`. Without it there is no `_start`/panic handler, so the binary is
+# skipped in ordinary workspace builds.
+[[bin]]
+name = "timer"
+path = "src/main.rs"
+required-features = ["rt"]
+test = false
+bench = false
+
+[features]
+rt = ["libpafos/rt"]
+
 [dependencies]
 libpafos = { path = "../../libpafos" }

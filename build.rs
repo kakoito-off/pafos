@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Programs built as executables; each sits behind a feature of the same name.
-const PROGRAMS: &[&str] = &["time", "fault"];
+const PROGRAMS: &[&str] = &["calc", "time", "timer", "fault"];
 
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -29,7 +29,7 @@ fn build(root: &Path, name: &str, dest: &Path) {
     let mut cargo = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     cargo
         .current_dir(root)
-        .args(["rustc", "--release", "--package", &format!("pafos-{name}"), "--bin", name])
+        .args(["rustc", "--release", "--package", &format!("pafos-{name}"), "--bin", name, "--features", "rt"])
         .arg("--target-dir")
         .arg(&target_dir)
         .arg("--")
