@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Just build the blog_os bootimage, without running QEMU.
+    Just build the pafos bootimage, without running QEMU.
 
 .EXAMPLE
     .\build.ps1

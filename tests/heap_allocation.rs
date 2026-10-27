@@ -1,21 +1,21 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(blog_os::test_runner)]
+#![test_runner(pafos::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-use blog_os::allocator::HEAP_SIZE;
+use pafos::allocator::HEAP_SIZE;
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 
 entry_point!(main);
 
 fn main(boot_info: &'static BootInfo) -> ! {
-    blog_os::init_core();
-    blog_os::init_memory(boot_info);
+    pafos::init_core();
+    pafos::init_memory(boot_info);
 
     test_main();
     loop {}
@@ -49,5 +49,5 @@ fn many_boxes() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    blog_os::test_panic_handler(info)
+    pafos::test_panic_handler(info)
 }

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build (if needed) and run blog_os in QEMU.
+    Build (if needed) and run pafos in QEMU.
 
 .EXAMPLE
     .\run.ps1

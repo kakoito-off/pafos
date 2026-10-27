@@ -1,4 +1,6 @@
-# micro-os
+# PAFOS — Pure And Fast OS
+
+**PAFOS** (Pure And Fast OS) — официальное название проекта. Имя крейта — `pafos`.
 
 Учебная микро-ОС на Rust для x86_64, запускается в QEMU.
 
@@ -38,6 +40,19 @@ cargo test
 (headless, `-display none`), результат читается через serial-порт и
 exit-код QEMU (`isa-debug-exit`).
 
+## Что видно на экране при запуске
+
+- `Hello World!` / `It did not crash!` — ядро загрузилось и прошло инициализацию
+  (`init_core` + `init_memory`).
+- **Бесконечно бегущие точки `.`** — это **не клавиатура**, а **прерывание таймера**.
+  Чип PIT (Programmable Interval Timer) через PIC шлёт IRQ0 (вектор 32 в IDT)
+  примерно 18 раз в секунду, и `timer_interrupt_handler` в `interrupts.rs`
+  на каждый тик печатает `.`. По сути это визуальный "пульс" ядра: точки идут —
+  значит прерывания включены и EOI отправляется корректно.
+- **Символы при нажатии клавиш** — это уже прерывание клавиатуры (IRQ1, вектор 33):
+  `keyboard_interrupt_handler` читает scancode из порта `0x60`, декодирует его
+  через `pc-keyboard` и печатает символ.
+
 ## Структура
 
 ```
@@ -50,6 +65,7 @@ src/
   interrupts.rs   IDT, обработчики исключений, PIC, таймер, клавиатура
   memory.rs       пэйджинг: доступ к таблицам страниц, frame allocator
   allocator.rs    куча (global allocator) поверх пэйджинга
+x86_64-pafos.json   описание target-платформы (bare metal x86_64)
 tests/
   basic_boot.rs       базовая проверка загрузки
   should_panic.rs     проверка, что паника действительно происходит
