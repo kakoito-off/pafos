@@ -56,7 +56,25 @@ pub mod nr {
     pub const EXEC: usize = 30;
     /// `(index, *mut Name)` → 1 if filled, 0 past the last program.
     pub const PROGRAM_AT: usize = 31;
+    /// `(exit code)` → does not return. Only for programs running in ring 3.
+    pub const EXIT: usize = 32;
 }
+
+/// Where a ring 3 program lives in its address space. Program ELF files are
+/// linked to load at [`USER_BASE`]; the kernel puts the stack just below
+/// [`USER_STACK_TOP`] and the arguments on top of it.
+///
+/// At entry `rdi` = argc and `rsi` = pointer to `argc` [`StrRef`]s.
+pub mod layout {
+    /// Start of the user region: exactly one level 4 page table entry (512 GiB).
+    pub const USER_BASE: u64 = 0x6000_0000_0000;
+    pub const USER_END: u64 = USER_BASE + (1 << 39);
+    pub const USER_STACK_TOP: u64 = USER_BASE + 0x4000_0000;
+    pub const USER_STACK_SIZE: u64 = 64 * 1024;
+}
+
+/// Most arguments a program can be started with.
+pub const MAX_ARGS: usize = 32;
 
 pub const READ_KEY_NONBLOCK: usize = 1;
 
@@ -184,6 +202,9 @@ pub enum Exit {
     Success = 0,
     Error = 1,
     Interrupted = 2,
+    /// Killed by the kernel: a CPU fault (bad memory access, invalid
+    /// instruction, ...) or a panic.
+    Crashed = 3,
 }
 
 impl Exit {
@@ -191,6 +212,7 @@ impl Exit {
         match raw {
             0 => Exit::Success,
             2 => Exit::Interrupted,
+            3 => Exit::Crashed,
             _ => Exit::Error,
         }
     }

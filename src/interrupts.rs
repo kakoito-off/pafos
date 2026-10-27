@@ -1,4 +1,4 @@
-use crate::{gdt, hlt_loop, println};
+use crate::{gdt, hlt_loop, println, process};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
@@ -29,6 +29,10 @@ lazy_static! {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.divide_error.set_handler_fn(divide_error_handler);
+        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+        idt.stack_segment_fault.set_handler_fn(stack_segment_fault_handler);
         unsafe {
             idt.double_fault
                 .set_handler_fn(double_fault_handler)
@@ -56,17 +60,59 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
+/// True if the CPU was running ring 3 code when the exception happened.
+/// Such a fault is the program's problem: it gets killed, the kernel goes on.
+fn from_user(stack_frame: &InterruptStackFrame) -> bool {
+    stack_frame.code_segment.rpl() == PrivilegeLevel::Ring3
+}
+
 extern "x86-interrupt" fn page_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
     use x86_64::registers::control::Cr2;
 
+    if from_user(&stack_frame) {
+        let addr = Cr2::read().map_or(0, |a| a.as_u64());
+        process::kill(format_args!("page fault at {:#x}", addr));
+    }
     println!("EXCEPTION: PAGE FAULT");
     println!("Accessed Address: {:?}", Cr2::read());
     println!("Error Code: {:?}", error_code);
     println!("{:#?}", stack_frame);
     hlt_loop();
+}
+
+extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame) {
+    if from_user(&stack_frame) {
+        process::kill(format_args!("division by zero"));
+    }
+    panic!("EXCEPTION: DIVIDE ERROR
+{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
+    if from_user(&stack_frame) {
+        process::kill(format_args!("invalid instruction at {:#x}", stack_frame.instruction_pointer.as_u64()));
+    }
+    panic!("EXCEPTION: INVALID OPCODE
+{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn general_protection_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    if from_user(&stack_frame) {
+        process::kill(format_args!("protection fault at {:#x}", stack_frame.instruction_pointer.as_u64()));
+    }
+    panic!("EXCEPTION: GENERAL PROTECTION FAULT ({:#x})
+{:#?}", error_code, stack_frame);
+}
+
+extern "x86-interrupt" fn stack_segment_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    if from_user(&stack_frame) {
+        process::kill(format_args!("stack fault"));
+    }
+    panic!("EXCEPTION: STACK SEGMENT FAULT ({:#x})
+{:#?}", error_code, stack_frame);
 }
 
 extern "x86-interrupt" fn double_fault_handler(

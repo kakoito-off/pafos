@@ -1,11 +1,77 @@
+use alloc::vec::Vec;
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+use spin::Mutex;
 use x86_64::{
     PhysAddr, VirtAddr,
     structures::paging::{
-        FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame,
-        Size4KiB, mapper::MapToError,
+        FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable,
+        PageTableFlags, PhysFrame, Size4KiB, mapper::MapToError,
     },
 };
+
+/// What the kernel keeps after boot to manage memory at run time: where all
+/// of physical memory is mapped, and the frame allocator.
+pub struct Memory {
+    pub phys_offset: VirtAddr,
+    pub frames: BootInfoFrameAllocator,
+}
+
+static MEMORY: Mutex<Option<Memory>> = Mutex::new(None);
+
+pub(crate) fn install(memory: Memory) {
+    *MEMORY.lock() = Some(memory);
+}
+
+pub(crate) fn with<T>(f: impl FnOnce(&mut Memory) -> T) -> T {
+    f(MEMORY.lock().as_mut().expect("memory not initialized"))
+}
+
+/// Physical frames handed out at run time and not given back yet; lets tests
+/// check that running programs does not leak memory.
+pub fn frames_in_use() -> usize {
+    MEMORY.lock().as_ref().map_or(0, |m| m.frames.in_use)
+}
+
+impl Memory {
+    /// The page table stored in `frame`, through the physical memory mapping.
+    ///
+    /// # Safety
+    /// `frame` must hold a page table, and no other reference to it may be live.
+    pub unsafe fn table(&self, frame: PhysFrame) -> &'static mut PageTable {
+        unsafe { &mut *(self.phys_offset + frame.start_address().as_u64()).as_mut_ptr() }
+    }
+
+    /// A frame filled with zeros.
+    pub fn zeroed_frame(&mut self) -> Option<PhysFrame> {
+        let frame = self.frames.allocate_frame()?;
+        let ptr: *mut u8 = (self.phys_offset + frame.start_address().as_u64()).as_mut_ptr();
+        unsafe { core::ptr::write_bytes(ptr, 0, 4096) };
+        Some(frame)
+    }
+}
+
+/// Flags of the page containing `addr` in the active address space, if it is
+/// mapped and every level of the walk allows ring 3 access.
+pub fn user_page_flags(addr: VirtAddr) -> Option<PageTableFlags> {
+    use x86_64::registers::control::Cr3;
+
+    let phys_offset = MEMORY.lock().as_ref()?.phys_offset;
+    let (mut frame, _) = Cr3::read();
+    let indices = [addr.p4_index(), addr.p3_index(), addr.p2_index(), addr.p1_index()];
+    let mut flags = PageTableFlags::empty();
+    for index in indices {
+        let table: &PageTable = unsafe { &*(phys_offset + frame.start_address().as_u64()).as_ptr() };
+        let entry = &table[index];
+        flags = entry.flags();
+        if !flags.contains(PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE)
+            || flags.contains(PageTableFlags::HUGE_PAGE)
+        {
+            return None;
+        }
+        frame = PhysFrame::containing_address(entry.addr());
+    }
+    Some(flags)
+}
 
 /// Backs the virtual range `start..start + size` with fresh physical frames.
 pub fn map_region(
@@ -67,10 +133,13 @@ unsafe impl FrameAllocator<Size4KiB> for EmptyFrameAllocator {
     }
 }
 
-/// A FrameAllocator that returns usable frames from the bootloader's memory map.
+/// A FrameAllocator that returns usable frames from the bootloader's memory
+/// map, reusing frames given back through [`FrameDeallocator`] first.
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
     next: usize,
+    free: Vec<PhysFrame>,
+    in_use: usize,
 }
 
 impl BootInfoFrameAllocator {
@@ -83,6 +152,10 @@ impl BootInfoFrameAllocator {
         BootInfoFrameAllocator {
             memory_map,
             next: 0,
+            // Empty until the first deallocation, so it is fine to create
+            // this before the heap exists.
+            free: Vec::new(),
+            in_use: 0,
         }
     }
 
@@ -102,8 +175,19 @@ impl BootInfoFrameAllocator {
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        let frame = self.free.pop().or_else(|| {
+            let frame = self.usable_frames().nth(self.next);
+            self.next += 1;
+            frame
+        })?;
+        self.in_use += 1;
+        Some(frame)
+    }
+}
+
+impl FrameDeallocator<Size4KiB> for BootInfoFrameAllocator {
+    unsafe fn deallocate_frame(&mut self, frame: PhysFrame) {
+        self.free.push(frame);
+        self.in_use -= 1;
     }
 }

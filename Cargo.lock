@@ -45,6 +45,7 @@ dependencies = [
 name = "libpafos"
 version = "0.1.0"
 dependencies = [
+ "linked_list_allocator",
  "pafos-abi",
 ]
 
@@ -78,7 +79,6 @@ dependencies = [
  "pafos-abi",
  "pafos-calc",
  "pafos-shell",
- "pafos-time",
  "pafos-timer",
  "pc-keyboard",
  "pic8259",
@@ -97,6 +97,14 @@ name = "pafos-calc"
 version = "0.1.0"
 dependencies = [
  "libpafos",
+]
+
+[[package]]
+name = "pafos-fault"
+version = "0.1.0"
+dependencies = [
+ "libpafos",
+ "pafos-abi",
 ]
 
 [[package]]

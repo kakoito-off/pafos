@@ -1,0 +1,15 @@
+[package]
+name = "pafos-fault"
+version = "0.1.0"
+edition = "2024"
+
+# Built as its own ring 3 executable (see the kernel's build.rs).
+[[bin]]
+name = "fault"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+libpafos = { path = "../../libpafos", features = ["rt"] }
+pafos-abi = { path = "../../abi" }

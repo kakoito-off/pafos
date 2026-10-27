@@ -15,6 +15,7 @@ pub mod gdt;
 mod input;
 pub mod interrupts;
 pub mod memory;
+mod process;
 pub mod programs;
 pub mod serial;
 pub mod syscall;
@@ -54,6 +55,8 @@ pub fn init_memory(boot_info: &'static BootInfo) {
     .expect("tmpfs region mapping failed");
     // The region was just mapped and nothing else uses it; the heap is ready.
     unsafe { tmpfs::init(tmpfs::TMPFS_START, tmpfs::TMPFS_SIZE) };
+
+    memory::install(memory::Memory { phys_offset: phys_mem_offset, frames: frame_allocator });
 }
 pub trait Testable {
     fn run(&self) -> ();

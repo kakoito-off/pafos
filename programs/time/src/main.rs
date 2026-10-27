@@ -1,11 +1,14 @@
 //! `time`: how long the system has been running.
 
 #![no_std]
+#![no_main]
 
 use libpafos::time::{self, Elapsed};
 use libpafos::{Exit, println};
 
-pub fn main(args: &[&str]) -> Exit {
+libpafos::entry!(main);
+
+fn main(args: &[&str]) -> Exit {
     if !args.is_empty() {
         println!("usage: time");
         return Exit::Error;

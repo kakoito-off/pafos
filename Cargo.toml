@@ -27,22 +27,27 @@ linked_list_allocator = "0.9.0"
 pafos-abi = { path = "abi" }
 pafos-shell = { path = "programs/shell", optional = true }
 pafos-calc = { path = "programs/calc", optional = true }
-pafos-time = { path = "programs/time", optional = true }
 pafos-timer = { path = "programs/timer", optional = true }
 
 # Every program is optional; `cargo build --no-default-features` gives a
 # kernel with no programs at all, which boots to a blank screen.
+# shell, calc and timer are linked into the kernel and run in ring 0; time
+# and fault are separate executables run in ring 3 (built by build.rs).
 [features]
-default = ["shell", "calc", "time", "timer"]
+default = ["shell", "calc", "time", "timer", "fault"]
 shell = ["dep:pafos-shell"]
 calc = ["dep:pafos-calc"]
-time = ["dep:pafos-time"]
 timer = ["dep:pafos-timer"]
+time = []
+fault = []
 
 # The kernel itself never uses libpafos; tests do, to go through system calls
 # exactly like a program would.
 [dev-dependencies]
 libpafos = { path = "libpafos" }
+
+[build-dependencies]
+pafos-abi = { path = "abi" }
 
 [dependencies.lazy_static]
 version = "1.0"

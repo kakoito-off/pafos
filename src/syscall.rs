@@ -2,17 +2,21 @@
 //!
 //! A program executes `int 0x80` (see `pafos_abi::SYSCALL_VECTOR` for the
 //! register convention). [`entry`] saves registers and hands them to
-//! [`dispatch`]. Programs still run in ring 0 for now; once they run in
-//! ring 3 the CPU switches to the TSS's RSP0 stack on the way in, and the
-//! `user_*` helpers start checking that pointers lie in the program's memory.
+//! [`dispatch`], together with the privilege level of the caller. Calls from
+//! ring 3 arrive on the TSS's RSP0 stack, and every pointer they pass is
+//! checked against the program's own mappings before the kernel touches it.
+//! Programs linked into the kernel (ring 0) are trusted.
 
-use crate::{clock, input, programs, tmpfs, vga_buffer};
+use crate::{clock, input, memory, process, programs, tmpfs, vga_buffer};
 use alloc::vec::Vec;
+use core::arch::naked_asm;
+use pafos_abi::layout::{USER_BASE, USER_END};
 use pafos_abi::{
     Error, FIRST_FILE_FD, FsStats, Mode, READ_KEY_NONBLOCK, STDOUT, StrRef, console, encode, nr,
 };
-use core::arch::naked_asm;
+use x86_64::VirtAddr;
 use x86_64::instructions::interrupts;
+use x86_64::structures::paging::PageTableFlags;
 
 /// Handler for the system call vector.
 ///
@@ -35,7 +39,9 @@ pub extern "C" fn entry() {
         "sub rsp, 8",
         // The C ABI requires the direction flag clear; the program may have set it.
         "cld",
-        // Syscall registers -> C arguments: handle(rax, rdi, rsi, rdx, r10).
+        // Caller's CS from the interrupt frame (after 72 bytes of pushes: RIP, then CS).
+        "mov r9, [rsp + 80]",
+        // Syscall registers -> C arguments: handle(rax, rdi, rsi, rdx, r10, cs).
         "mov r8, r10",
         "mov rcx, rdx",
         "mov rdx, rsi",
@@ -56,11 +62,12 @@ pub extern "C" fn entry() {
     );
 }
 
-extern "C" fn handle(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
-    encode(dispatch(nr, [a0, a1, a2, a3]))
+extern "C" fn handle(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, cs: u64) -> isize {
+    let caller = Caller { user: cs & 3 == 3 };
+    encode(dispatch(caller, nr, [a0, a1, a2, a3]))
 }
 
-fn dispatch(nr: usize, a: [usize; 4]) -> Result<usize, Error> {
+fn dispatch(c: Caller, nr: usize, a: [usize; 4]) -> Result<usize, Error> {
     match nr {
         nr::READ_KEY => read_key(a[0]),
         nr::STOP_REQUESTED => Ok(input::stop_requested() as usize),
@@ -70,25 +77,28 @@ fn dispatch(nr: usize, a: [usize; 4]) -> Result<usize, Error> {
         }
         nr::CONSOLE_CTL => console_ctl(a[0]),
 
-        nr::CREATE => tmpfs::create(user_str(a[0], a[1])?).map(|()| 0),
+        nr::CREATE => tmpfs::create(c.str(a[0], a[1])?).map(|()| 0),
         nr::OPEN => {
-            let fd = tmpfs::open(user_str(a[0], a[1])?, Mode::from_raw(a[2])?)?;
+            let fd = tmpfs::open(c.str(a[0], a[1])?, Mode::from_raw(a[2])?)?;
             Ok(fd + FIRST_FILE_FD)
         }
-        nr::READ => tmpfs::read(file_fd(a[0])?, user_buf_mut(a[1], a[2])?),
-        nr::WRITE => write(a[0], user_buf(a[1], a[2])?),
+        nr::READ => tmpfs::read(file_fd(a[0])?, c.buf_mut(a[1], a[2])?),
+        nr::WRITE => write(a[0], c.buf(a[1], a[2])?),
         nr::CLOSE => tmpfs::close(file_fd(a[0])?).map(|()| 0),
-        nr::UNLINK => tmpfs::remove(user_str(a[0], a[1])?).map(|()| 0),
-        nr::READDIR => fill(a[1], tmpfs::file_at(a[0])),
+        nr::UNLINK => tmpfs::remove(c.str(a[0], a[1])?).map(|()| 0),
+        nr::READDIR => fill(c, a[1], tmpfs::file_at(a[0])),
         nr::FSSTAT => {
-            *user_mut::<FsStats>(a[0])? = tmpfs::stats()?;
+            *c.out::<FsStats>(a[0])? = tmpfs::stats()?;
             Ok(0)
         }
 
         nr::UPTIME_MS => Ok(clock::uptime_ms() as usize),
 
-        nr::EXEC => exec(a),
-        nr::PROGRAM_AT => fill(a[1], programs::name_at(a[0])),
+        nr::EXEC => exec(c, a),
+        nr::PROGRAM_AT => fill(c, a[1], programs::name_at(a[0])),
+        nr::EXIT if c.user => process::exit(a[0]),
+        // A ring 0 program has nowhere to exit to; it returns from `main`.
+        nr::EXIT => Err(Error::InvalidArgument),
         _ => Err(Error::NoSyscall),
     }
 }
@@ -126,60 +136,91 @@ fn file_fd(fd: usize) -> Result<usize, Error> {
 }
 
 /// Copies an optional record out to the program: 1 if there was one, 0 if not.
-fn fill<T: Copy>(ptr: usize, value: Option<T>) -> Result<usize, Error> {
+fn fill<T: Copy>(c: Caller, ptr: usize, value: Option<T>) -> Result<usize, Error> {
     match value {
         Some(value) => {
-            *user_mut::<T>(ptr)? = value;
+            *c.out::<T>(ptr)? = value;
             Ok(1)
         }
         None => Ok(0),
     }
 }
 
-fn exec(a: [usize; 4]) -> Result<usize, Error> {
-    let name = user_str(a[0], a[1])?;
-    let argv = user_slice::<StrRef>(a[2], a[3])?;
-    let args = argv.iter().map(|arg| user_str(arg.ptr as usize, arg.len)).collect::<Result<Vec<_>, _>>()?;
+fn exec(c: Caller, a: [usize; 4]) -> Result<usize, Error> {
+    // Starting programs from ring 3 needs a kernel stack per process.
+    if c.user {
+        return Err(Error::Busy);
+    }
+    let name = c.str(a[0], a[1])?;
+    let argv = c.slice::<StrRef>(a[2], a[3])?;
+    let args = argv.iter().map(|arg| c.str(arg.ptr as usize, arg.len)).collect::<Result<Vec<_>, _>>()?;
     programs::run(name, &args).map(|exit| exit as usize)
 }
 
 // --- Access to program memory. -------------------------------------------
-// In ring 0 programs share the kernel's address space, so these only reject
-// null and misaligned pointers. In ring 3 they must also check that the whole
-// range belongs to the calling program.
 
-fn user_slice<'a, T>(ptr: usize, len: usize) -> Result<&'a [T], Error> {
-    if len == 0 {
-        return Ok(&[]);
-    }
-    if ptr == 0 || ptr % align_of::<T>() != 0 {
-        return Err(Error::InvalidArgument);
-    }
-    Ok(unsafe { core::slice::from_raw_parts(ptr as *const T, len) })
+/// Who made the call. Programs in ring 0 share the kernel's address space, so
+/// their pointers are only checked for null and alignment. For ring 3 the
+/// whole range must also be mapped for user access in the program's own
+/// region (and writable where the kernel writes), so a bad pointer is an
+/// error instead of a kernel page fault or a peek into kernel memory.
+#[derive(Clone, Copy)]
+struct Caller {
+    user: bool,
 }
 
-fn user_buf<'a>(ptr: usize, len: usize) -> Result<&'a [u8], Error> {
-    user_slice(ptr, len)
-}
-
-fn user_buf_mut<'a>(ptr: usize, len: usize) -> Result<&'a mut [u8], Error> {
-    if len == 0 {
-        return Ok(&mut []);
+impl Caller {
+    fn check(self, ptr: usize, bytes: usize, align: usize, writable: bool) -> Result<(), Error> {
+        if ptr == 0 || ptr % align != 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if !self.user {
+            return Ok(());
+        }
+        let start = ptr as u64;
+        let end = start.checked_add(bytes as u64).ok_or(Error::InvalidArgument)?;
+        if start < USER_BASE || end > USER_END {
+            return Err(Error::InvalidArgument);
+        }
+        let mut page = start & !0xfff;
+        while page < end {
+            let flags = memory::user_page_flags(VirtAddr::new(page)).ok_or(Error::InvalidArgument)?;
+            if writable && !flags.contains(PageTableFlags::WRITABLE) {
+                return Err(Error::InvalidArgument);
+            }
+            page += 4096;
+        }
+        Ok(())
     }
-    if ptr == 0 {
-        return Err(Error::InvalidArgument);
+
+    fn slice<'a, T>(self, ptr: usize, len: usize) -> Result<&'a [T], Error> {
+        if len == 0 {
+            return Ok(&[]);
+        }
+        let bytes = len.checked_mul(size_of::<T>()).ok_or(Error::InvalidArgument)?;
+        self.check(ptr, bytes, align_of::<T>(), false)?;
+        Ok(unsafe { core::slice::from_raw_parts(ptr as *const T, len) })
     }
-    Ok(unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len) })
-}
 
-fn user_str<'a>(ptr: usize, len: usize) -> Result<&'a str, Error> {
-    core::str::from_utf8(user_buf(ptr, len)?).map_err(|_| Error::InvalidArgument)
-}
-
-fn user_mut<'a, T>(ptr: usize) -> Result<&'a mut T, Error> {
-    if ptr == 0 || ptr % align_of::<T>() != 0 {
-        return Err(Error::InvalidArgument);
+    fn buf<'a>(self, ptr: usize, len: usize) -> Result<&'a [u8], Error> {
+        self.slice(ptr, len)
     }
-    Ok(unsafe { &mut *(ptr as *mut T) })
-}
 
+    fn buf_mut<'a>(self, ptr: usize, len: usize) -> Result<&'a mut [u8], Error> {
+        if len == 0 {
+            return Ok(&mut []);
+        }
+        self.check(ptr, len, 1, true)?;
+        Ok(unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len) })
+    }
+
+    fn str<'a>(self, ptr: usize, len: usize) -> Result<&'a str, Error> {
+        core::str::from_utf8(self.buf(ptr, len)?).map_err(|_| Error::InvalidArgument)
+    }
+
+    /// A place to copy a record out to.
+    fn out<'a, T>(self, ptr: usize) -> Result<&'a mut T, Error> {
+        self.check(ptr, size_of::<T>(), align_of::<T>(), true)?;
+        Ok(unsafe { &mut *(ptr as *mut T) })
+    }
+}

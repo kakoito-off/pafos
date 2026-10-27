@@ -12,6 +12,8 @@ pub mod fs;
 pub mod io;
 pub mod process;
 pub mod raw;
+#[cfg(feature = "rt")]
+pub mod rt;
 pub mod time;
 
 pub use pafos_abi::{Error, Exit, MAX_NAME_LEN};
