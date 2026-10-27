@@ -26,9 +26,9 @@ pub const MAX_NAME_LEN: usize = 32;
 pub enum Mode {
     /// Read an existing file from the start.
     Read,
-    /// Create the file if needed and truncate it to zero length.
+    /// Truncate an existing file to zero length and write from the start.
     Write,
-    /// Create the file if needed and write at its end.
+    /// Write at the end of an existing file.
     Append,
 }
 
@@ -36,6 +36,7 @@ pub enum Mode {
 pub enum FsError {
     Unavailable,
     NotFound,
+    AlreadyExists,
     InvalidName,
     TooManyFiles,
     TooManyOpen,
@@ -50,6 +51,7 @@ impl fmt::Display for FsError {
         let msg = match self {
             FsError::Unavailable => "file system not initialized",
             FsError::NotFound => "no such file",
+            FsError::AlreadyExists => "file already exists",
             FsError::InvalidName => "invalid file name",
             FsError::TooManyFiles => "too many files",
             FsError::TooManyOpen => "too many open files",
@@ -176,6 +178,19 @@ impl Tmpfs {
         self.open_files.iter().flatten().any(|f| f.name == name)
     }
 
+    /// Files only come into existence here; `open` never creates them.
+    fn create(&mut self, name: &str) -> Result<(), FsError> {
+        validate_name(name)?;
+        if self.files.contains_key(name) {
+            return Err(FsError::AlreadyExists);
+        }
+        if self.files.len() >= MAX_FILES {
+            return Err(FsError::TooManyFiles);
+        }
+        self.files.insert(String::from(name), Inode { size: 0, blocks: Vec::new() });
+        Ok(())
+    }
+
     fn open(&mut self, name: &str, mode: Mode) -> Result<usize, FsError> {
         validate_name(name)?;
         // One open handle per file keeps the semantics trivial: no concurrent writers.
@@ -187,16 +202,6 @@ impl Tmpfs {
             .iter()
             .position(Option::is_none)
             .ok_or(FsError::TooManyOpen)?;
-
-        if !self.files.contains_key(name) {
-            if mode == Mode::Read {
-                return Err(FsError::NotFound);
-            }
-            if self.files.len() >= MAX_FILES {
-                return Err(FsError::TooManyFiles);
-            }
-            self.files.insert(String::from(name), Inode { size: 0, blocks: Vec::new() });
-        }
 
         let inode = self.files.get_mut(name).ok_or(FsError::NotFound)?;
         let pos = match mode {
@@ -299,6 +304,10 @@ impl Tmpfs {
             files: self.files.len(),
         }
     }
+}
+
+pub fn create(name: &str) -> Result<(), FsError> {
+    with_fs(|fs| fs.create(name))
 }
 
 pub fn open(name: &str, mode: Mode) -> Result<usize, FsError> {

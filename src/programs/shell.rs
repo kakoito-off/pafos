@@ -50,10 +50,9 @@ pub fn main(_args: &[&str]) -> Exit {
             }
             "df" => df(),
             "cat" => with_name(command, rest, cat),
-            "touch" => with_name(command, rest, |name| File::open(name, Mode::Append).map(drop)),
+            "create" => with_name(command, rest, sys::create_file),
             "rm" => with_name(command, rest, sys::remove_file),
-            "write" => write_text(command, rest, Mode::Write),
-            "append" => write_text(command, rest, Mode::Append),
+            "editfile" => editfile(rest),
             _ => {
                 println!("unknown command: {}", command);
                 Ok(())
@@ -120,14 +119,32 @@ fn cat(name: &str) -> Result<(), FsError> {
     Ok(())
 }
 
-fn write_text(command: &str, args: &[&str], mode: Mode) -> Result<(), FsError> {
-    let Some((&name, words)) = args.split_first() else {
-        println!("usage: {} <file> <text...>", command);
-        return Ok(());
+const EDITFILE_USAGE: &str = "usage: editfile <file> (addline <text> | write <text> | clear)";
+
+/// Changes an existing file; never creates one (that is what `create` is for).
+fn editfile(args: &[&str]) -> Result<(), FsError> {
+    let (name, action, words) = match args {
+        [name, action, words @ ..] => (*name, *action, words),
+        _ => {
+            println!("{}", EDITFILE_USAGE);
+            return Ok(());
+        }
     };
-    let mut text = words.join(" ");
-    text.push('\n');
-    File::open(name, mode)?.write(text.as_bytes())?;
+    let mode = match (action, words) {
+        ("addline", _) => Mode::Append,
+        ("write", [_, ..]) => Mode::Write,
+        ("clear", []) => Mode::Write,
+        _ => {
+            println!("{}", EDITFILE_USAGE);
+            return Ok(());
+        }
+    };
+    let mut file = File::open(name, mode)?;
+    if action != "clear" {
+        let mut text = words.join(" ");
+        text.push('\n');
+        file.write(text.as_bytes())?;
+    }
     Ok(())
 }
 
@@ -170,8 +187,10 @@ fn help() {
     println!("clear        clear the screen");
     println!("exit         exit the shell (same as Ctrl+D)");
     println!("ls           list files          df            file system usage");
-    println!("cat <f>      print file          touch <f>     create empty file");
-    println!("write <f> <text>   overwrite     append <f> <text>   add a line");
+    println!("cat <f>      print file          create <f>    create empty file");
     println!("rm <f>       delete file");
+    println!("editfile <f> addline <text>      append a line to the file");
+    println!("editfile <f> write <text>        replace file contents with the text");
+    println!("editfile <f> clear               make the file empty");
     println!("Ctrl+C cancels the current line.");
 }

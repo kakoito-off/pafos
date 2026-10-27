@@ -92,6 +92,12 @@ impl Drop for File {
     }
 }
 
+/// Creates an empty file; fails with `AlreadyExists` if the name is taken.
+/// `File::open` never creates files, in any mode.
+pub fn create_file(name: &str) -> Result<(), FsError> {
+    tmpfs::create(name)
+}
+
 pub fn remove_file(name: &str) -> Result<(), FsError> {
     tmpfs::remove(name)
 }
