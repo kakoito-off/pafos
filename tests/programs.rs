@@ -12,6 +12,7 @@ use core::panic::PanicInfo;
 use libpafos::fs::{self, File, Mode};
 use libpafos::time::{Elapsed, uptime_ms};
 use libpafos::{Error, Exit, process};
+use pafos_calc::{CalcError, eval};
 
 entry_point!(main);
 
@@ -87,4 +88,38 @@ fn timer_reports_a_damaged_file() {
     File::open("timer", Mode::Write).unwrap().write(b"garbage").unwrap();
     assert_eq!(run("timer", &["show"]), Exit::Error);
     assert_eq!(run("timer", &["clear"]), Exit::Success);
+}
+
+#[test_case]
+fn calc_follows_precedence_and_parentheses() {
+    assert_eq!(eval("2+3*4"), Ok(14));
+    assert_eq!(eval("(2 + 3) * 4"), Ok(20));
+    assert_eq!(eval("10 - 4 - 3"), Ok(3));
+    assert_eq!(eval("-7 / 2"), Ok(-3));
+    assert_eq!(eval("-7 % 3"), Ok(-1));
+    assert_eq!(eval("--5 + +1"), Ok(6));
+    assert_eq!(eval(" 42 "), Ok(42));
+}
+
+#[test_case]
+fn calc_reports_errors() {
+    assert_eq!(eval(""), Err(CalcError::UnexpectedEnd));
+    assert_eq!(eval("2 +"), Err(CalcError::UnexpectedEnd));
+    assert_eq!(eval("(1"), Err(CalcError::UnexpectedEnd));
+    assert_eq!(eval("1)"), Err(CalcError::UnexpectedChar(')')));
+    assert_eq!(eval("2 x 3"), Err(CalcError::UnexpectedChar('x')));
+    assert_eq!(eval("1 2"), Err(CalcError::UnexpectedChar('2')));
+    assert_eq!(eval("5 / 0"), Err(CalcError::DivisionByZero));
+    assert_eq!(eval("5 % (2 - 2)"), Err(CalcError::DivisionByZero));
+    assert_eq!(eval("9223372036854775807 + 1"), Err(CalcError::Overflow));
+    assert_eq!(eval("99999999999999999999"), Err(CalcError::Overflow));
+    assert_eq!(eval("(0 - 9223372036854775807 - 1) / -1"), Err(CalcError::Overflow));
+    let deep = "(".repeat(100) + "1" + &")".repeat(100);
+    assert_eq!(eval(&deep), Err(CalcError::TooDeep));
+}
+
+#[test_case]
+fn calc_runs_as_a_program() {
+    assert_eq!(run("calc", &["2", "+", "2"]), Exit::Success);
+    assert_eq!(run("calc", &["1/0"]), Exit::Error);
 }

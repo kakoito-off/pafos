@@ -13,6 +13,8 @@ type Main = fn(args: &[&str]) -> Exit;
 
 static PROGRAMS: &[(&str, Main)] = &[
     ("shell", pafos_shell::main),
+    #[cfg(feature = "calc")]
+    ("calc", pafos_calc::main),
     #[cfg(feature = "time")]
     ("time", pafos_time::main),
     #[cfg(feature = "timer")]
